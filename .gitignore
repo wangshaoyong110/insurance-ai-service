@@ -1,0 +1,46 @@
+# ---- 后端 ----
+backend/target/
+*.class
+*.jar
+!backend/.mvn/wrapper/maven-wrapper.jar
+backend/upload/
+upload/
+
+# ---- 前端 ----
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/*.local
+node_modules/
+
+# ---- IDE / 系统 ----
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# ---- 日志 ----
+logs/
+backend/logs/
+*.log
+*.log.gz
+
+# ---- 本地配置 / 密钥(含真实凭据,勿提交) ----
+backend/src/main/resources/application-local.yml
+backend/src/main/resources/application-local.yaml
+.env.local
+.env.*.local
+frontend/.env.local
+*.pem
+*.key
+*.p12
+*.jks
+secrets.yml
+
+# ---- 构建与临时产物 ----
+*.zip
+*.tar.gz
+*.tmp

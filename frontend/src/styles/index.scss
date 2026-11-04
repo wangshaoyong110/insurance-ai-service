@@ -1,0 +1,114 @@
+// ===================================================================
+// 全局样式入口
+// ===================================================================
+@use './variables.scss' as *;
+@use './reset.scss';
+@use './mixins.scss' as *;
+
+// ---------------- Element Plus 主题变量对齐 ----------------
+:root {
+  --el-color-primary: #{$color-primary};
+  --el-color-primary-light-3: #{$color-primary-light};
+  --el-color-primary-light-5: #6f9bd0;
+  --el-color-primary-light-7: #b6cbe4;
+  --el-color-primary-light-8: #d3e0ef;
+  --el-color-primary-light-9: #eaf1f9;
+  --el-color-primary-dark-2: #{$color-primary-dark};
+  --el-color-success: #{$color-success};
+  --el-color-warning: #{$color-warning};
+  --el-color-danger: #{$color-danger};
+  --el-color-info: #{$color-info};
+  --el-text-color-primary: #{$color-text-primary};
+  --el-text-color-regular: #{$color-text-regular};
+  --el-border-radius-base: #{$radius-sm};
+  --el-font-size-base: #{$font-size-base};
+}
+
+// ---------------- 通用布局类 ----------------
+.page-container {
+  padding: $spacing-lg;
+  min-height: calc(100vh - #{$header-height});
+}
+
+.card {
+  @include card;
+}
+
+.flex-between {
+  @include flex-between;
+}
+
+.flex-center {
+  @include flex-center;
+}
+
+.text-ellipsis {
+  @include ellipsis;
+}
+
+.text-secondary {
+  color: $color-text-secondary;
+}
+
+.mt-xs {
+  margin-top: $spacing-xs;
+}
+
+.mt-sm {
+  margin-top: $spacing-sm;
+}
+
+.mt-md {
+  margin-top: $spacing-md;
+}
+
+.mt-lg {
+  margin-top: $spacing-lg;
+}
+
+.mb-md {
+  margin-bottom: $spacing-md;
+}
+
+.mb-lg {
+  margin-bottom: $spacing-lg;
+}
+
+// ---------------- 滚动条统一 ----------------
+.scroll-y {
+  overflow-y: auto;
+  @include scrollbar;
+}
+
+// ---------------- 页面切换动画 ----------------
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.2s ease;
+}
+
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}
+
+// ---------------- 表格操作列 ----------------
+// 操作列通常放 3-4 个链接按钮,统一收紧间距与字号,
+// 避免列宽不足时按钮换行导致行高被撑开、末尾按钮被裁切
+.el-table {
+  .el-button.is-link {
+    height: auto;
+    margin-left: 0;
+    padding: 0 3px;
+    font-size: 12px;
+  }
+
+  .el-button.is-link + .el-button.is-link {
+    margin-left: 4px;
+  }
+
+  // 单元格左右内边距略收紧,给时间等长文本留出单行空间
+  .cell {
+    padding: 0 8px;
+    word-break: break-word;
+  }
+}

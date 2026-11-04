@@ -1,0 +1,146 @@
+server:
+  port: 8080
+  servlet:
+    context-path: /api
+  tomcat:
+    uri-encoding: UTF-8
+
+spring:
+  application:
+    name: insurance-ai-service
+  profiles:
+    active: dev
+  # ---------------- 数据源 ----------------
+  # 账号密码走环境变量,未设置时回退到本地开发默认值(root/root),便于 clone 后直接跑起来
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://${MYSQL_HOST:127.0.0.1}:${MYSQL_PORT:3306}/${MYSQL_DATABASE:insurance_ai}?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true&rewriteBatchedStatements=true
+    username: ${MYSQL_USERNAME:root}
+    password: ${MYSQL_PASSWORD:root}
+    hikari:
+      minimum-idle: 5
+      maximum-pool-size: 20
+      connection-timeout: 30000
+  # ---------------- Redis ----------------
+  data:
+    redis:
+      host: 127.0.0.1
+      port: 6379
+      database: 0
+      password:
+      timeout: 5000ms
+      lettuce:
+        pool:
+          max-active: 16
+          max-idle: 8
+          min-idle: 2
+  # ---------------- 文件上传 ----------------
+  servlet:
+    multipart:
+      max-file-size: 20MB
+      max-request-size: 50MB
+  jackson:
+    date-format: yyyy-MM-dd HH:mm:ss
+    time-zone: Asia/Shanghai
+    default-property-inclusion: always
+
+# ---------------- MyBatis-Plus ----------------
+mybatis-plus:
+  mapper-locations: classpath*:mapper/**/*.xml
+  type-aliases-package: com.insure.ai.modules
+  configuration:
+    map-underscore-to-camel-case: true
+    # SQL 通过 SLF4J 输出,可随应用日志一起落盘并按 traceId 追踪
+    log-impl: org.apache.ibatis.logging.slf4j.Slf4jImpl
+  global-config:
+    banner: false
+    db-config:
+      id-type: auto
+      logic-delete-field: deleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+
+# ---------------- 业务自定义配置 ----------------
+insure:
+  jwt:
+    # 生产环境请通过环境变量 INSURE_JWT_SECRET 覆盖,长度必须 >= 32 字节
+    secret: ${INSURE_JWT_SECRET:insurance-ai-dev-only-jwt-secret-change-me-32bytes}
+    # token 有效期(毫秒),默认 7 天
+    expire: 604800000
+    header: Authorization
+    prefix: "Bearer "
+  crypto:
+    # API Key 加密主密钥(AES-256-GCM),生产必须通过环境变量 INSURE_CRYPTO_SECRET 注入
+    # 未配置时使用内置默认值并打印安全告警;配置后不可变更,否则已入库的密文无法解密
+    secret: ${INSURE_CRYPTO_SECRET:}
+  upload:
+    # 本地存储根目录(Windows 示例:D:/insurance-upload/,Linux 示例:/data/upload/)
+    path: ./upload/
+    # 访问前缀,与 WebMvcConfig 中资源映射保持一致
+    url-prefix: /api/upload/
+  security:
+    # 免认证白名单
+    white-list:
+      # 客户端(客户)免登录接口
+      - /auth/login
+      - /auth/register
+      - /auth/captcha
+      # 管理端(业务操作人员)登录入口,与客户端完全独立
+      - /admin/auth/login
+      - /upload/**
+      - /error
+      # 接口文档(Swagger UI + OpenAPI JSON),内网交付时可通过 springdoc.api-docs.enabled=false 关闭
+      - /v3/api-docs/**
+      - /swagger-ui/**
+      - /swagger-ui.html
+  deepseek:
+    base-url: https://api.deepseek.com
+    # 仅用于首次启动时把配置迁移到数据表 ai_model_config(加密落库)
+    # 通过环境变量 INSURE_DEEPSEEK_API_KEY 注入;留空则跳过迁移,
+    # 改为登录后台「系统管理 → 模型配置」手动添加
+    api-key: ${INSURE_DEEPSEEK_API_KEY:}
+    model: deepseek-chat
+    # 请求超时(毫秒)
+    timeout: 60000
+    # 携带的历史对话条数
+    history-size: 10
+    temperature: 0.3
+
+# ---------------- 接口文档(Swagger / OpenAPI 3) ----------------
+# 入口:http://localhost:8080/api/swagger-ui.html
+springdoc:
+  api-docs:
+    # 生产/内网交付可置为 false 彻底关闭文档暴露
+    enabled: true
+    path: /v3/api-docs
+  swagger-ui:
+    enabled: true
+    # 访问 /swagger-ui.html 会自动跳转到 /swagger-ui/index.html
+    path: /swagger-ui.html
+    # 接口按标签名与接口名排序,便于人工查阅
+    tags-sorter: alpha
+    operations-sorter: alpha
+    # 不在页面内加载官方 demo 地址,只展示本地分组
+    disable-swagger-default-url: true
+    display-request-duration: true
+    # 默认选中「管理端接口」分组
+    urls-primary-name: 管理端接口
+  # 只扫描业务模块,排除 Spring 自带的 /error 等端点
+  packages-to-scan: com.insure.ai.modules
+  default-produces-media-type: application/json
+  cache:
+    disabled: true
+
+# ---------------- 日志 ----------------
+# 具体滚动与压缩策略见 resources/logback-spring.xml
+#   - 按天滚动:logs/yyyy-MM-dd/app.2026-11-04.0.log.gz
+#   - 保留 30 天,自动 gzip 压缩
+#   - 日志格式包含 traceId(响应头 X-Trace-Id 同步返回,便于前后端联查)
+logging:
+  config: classpath:logback-spring.xml
+  file:
+    path: ./logs
+  level:
+    root: info
+    com.insure.ai: debug
+    org.springframework.security: warn

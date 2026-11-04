@@ -1,0 +1,59 @@
+// ===================================================================
+// 通用样式混入
+// ===================================================================
+@use './variables.scss' as *;
+
+/// 水平垂直居中
+@mixin flex-center($direction: row) {
+  display: flex;
+  flex-direction: $direction;
+  align-items: center;
+  justify-content: center;
+}
+
+/// 两端对齐
+@mixin flex-between {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+/// 单行文本省略
+@mixin ellipsis {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/// 多行文本省略
+@mixin ellipsis-multi($lines: 2) {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: $lines;
+  overflow: hidden;
+}
+
+/// 卡片容器
+@mixin card($padding: $spacing-lg) {
+  background: $color-bg-card;
+  border-radius: $radius-md;
+  box-shadow: $shadow-card;
+  padding: $padding;
+}
+
+/// 自定义滚动条
+@mixin scrollbar($size: 6px) {
+  &::-webkit-scrollbar {
+    width: $size;
+    height: $size;
+  }
+
+  &::-webkit-scrollbar-thumb {
+    background: rgba(152, 162, 179, 0.5);
+    border-radius: $size;
+  }
+
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}

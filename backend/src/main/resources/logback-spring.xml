@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  日志配置(Logback)
+  =====================================================================
+  1) 控制台 + 文件双输出:开发看控制台,线上看文件
+  2) 按天滚动 + gzip 压缩:每天生成一个目录 yyyy-MM-dd/,归档文件自动压缩为 .gz
+  3) 保留 30 天,总大小上限 5GB,避免磁盘被占满
+  4) 错误日志单独输出到 error 文件,便于快速定位线上问题
+  5) 日志格式包含 traceId(MDC),一次请求的全部日志可通过 traceId 串联追踪
+  =====================================================================
+-->
+<configuration scan="true" scanPeriod="60 seconds">
+
+    <!-- 日志根目录:可通过环境变量 LOG_PATH 覆盖,默认项目根目录下的 logs/ -->
+    <springProperty scope="context" name="APP_NAME" source="spring.application.name" defaultValue="insurance-ai-service"/>
+    <property name="LOG_PATH" value="${LOG_PATH:-./logs}"/>
+    <property name="LOG_PATTERN"
+              value="%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level [%X{traceId:-}] %logger{48} - %msg%n"/>
+    <!-- 单个日志文件最大 50MB -->
+    <property name="MAX_FILE_SIZE" value="50MB"/>
+    <!-- 日志保留天数 -->
+    <property name="MAX_HISTORY" value="30"/>
+    <!-- 日志总大小上限 -->
+    <property name="TOTAL_SIZE_CAP" value="5GB"/>
+
+    <!-- ============================ 控制台 ============================ -->
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder class="ch.qos.logback.classic.encoder.PatternLayoutEncoder">
+            <!-- 控制台带颜色,便于开发排查 -->
+            <pattern>%d{HH:mm:ss.SSS} %highlight(%-5level) [%X{traceId:-}] %cyan(%logger{36}) - %msg%n</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+    </appender>
+
+    <!-- ========================= 全量日志文件 ========================= -->
+    <appender name="FILE_APP" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${LOG_PATH}/app.log</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <!-- 每天一个目录,按天滚动;%i 为同一天内的文件序号,历史文件自动 gzip 压缩 -->
+            <fileNamePattern>${LOG_PATH}/%d{yyyy-MM-dd}/app.%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
+            <maxFileSize>${MAX_FILE_SIZE}</maxFileSize>
+            <maxHistory>${MAX_HISTORY}</maxHistory>
+            <totalSizeCap>${TOTAL_SIZE_CAP}</totalSizeCap>
+            <cleanHistoryOnStart>true</cleanHistoryOnStart>
+        </rollingPolicy>
+        <encoder class="ch.qos.logback.classic.encoder.PatternLayoutEncoder">
+            <pattern>${LOG_PATTERN}</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+    </appender>
+
+    <!-- ========================= 错误日志文件 ========================= -->
+    <appender name="FILE_ERROR" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${LOG_PATH}/error.log</file>
+        <filter class="ch.qos.logback.classic.filter.LevelFilter">
+            <level>ERROR</level>
+            <onMatch>ACCEPT</onMatch>
+            <onMismatch>DENY</onMismatch>
+        </filter>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>${LOG_PATH}/%d{yyyy-MM-dd}/error.%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
+            <maxFileSize>${MAX_FILE_SIZE}</maxFileSize>
+            <maxHistory>${MAX_HISTORY}</maxHistory>
+            <totalSizeCap>${TOTAL_SIZE_CAP}</totalSizeCap>
+            <cleanHistoryOnStart>true</cleanHistoryOnStart>
+        </rollingPolicy>
+        <encoder class="ch.qos.logback.classic.encoder.PatternLayoutEncoder">
+            <pattern>${LOG_PATTERN}</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+    </appender>
+
+    <!-- 异步写文件:避免磁盘 IO 阻塞业务线程 -->
+    <appender name="ASYNC_APP" class="ch.qos.logback.classic.AsyncAppender">
+        <!-- 队列满时丢弃 TRACE/DEBUG/INFO,保留 WARN 及以上 -->
+        <discardingThreshold>0</discardingThreshold>
+        <queueSize>1024</queueSize>
+        <neverBlock>true</neverBlock>
+        <appender-ref ref="FILE_APP"/>
+    </appender>
+
+    <appender name="ASYNC_ERROR" class="ch.qos.logback.classic.AsyncAppender">
+        <queueSize>512</queueSize>
+        <neverBlock>true</neverBlock>
+        <appender-ref ref="FILE_ERROR"/>
+    </appender>
+
+    <!-- ============================ 日志级别 ============================ -->
+    <!-- 业务日志:开发环境 DEBUG,生产环境建议改为 INFO -->
+    <logger name="com.insure.ai" level="DEBUG"/>
+    <!-- 降低框架噪音 -->
+    <logger name="org.springframework" level="INFO"/>
+    <logger name="org.springframework.security" level="WARN"/>
+    <logger name="com.baomidou.mybatisplus" level="WARN"/>
+    <logger name="io.lettuce" level="WARN"/>
+    <logger name="org.apache.catalina" level="WARN"/>
+
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="ASYNC_APP"/>
+        <appender-ref ref="ASYNC_ERROR"/>
+    </root>
+</configuration>

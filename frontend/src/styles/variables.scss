@@ -1,0 +1,56 @@
+// ===================================================================
+// 全局 SCSS 变量(vite.config.ts 中通过 additionalData 自动注入,无需手动引入)
+// ===================================================================
+
+// ---------------- 主题色 ----------------
+$color-primary: #1b5faa; // 主色:沉稳保险蓝
+$color-primary-light: #3b82f6;
+$color-primary-dark: #123f73;
+$color-accent: #0f9d8f; // 辅助色:青绿
+$color-success: #12b76a;
+$color-warning: #f79009;
+$color-danger: #f04438;
+$color-info: #667085;
+
+// ---------------- 文字 ----------------
+$color-text-primary: #1f2d3d;
+$color-text-regular: #475467;
+$color-text-secondary: #98a2b3;
+$color-text-inverse: #ffffff;
+
+// ---------------- 背景与边框 ----------------
+$color-bg-page: #f5f7fa;
+$color-bg-card: #ffffff;
+$color-bg-hover: #f2f6fc;
+$color-border: #e4e7ec;
+$color-border-light: #eef2f6;
+
+// ---------------- 圆角 ----------------
+$radius-sm: 6px;
+$radius-md: 10px;
+$radius-lg: 16px;
+$radius-circle: 50%;
+
+// ---------------- 间距 ----------------
+$spacing-xs: 4px;
+$spacing-sm: 8px;
+$spacing-md: 16px;
+$spacing-lg: 24px;
+$spacing-xl: 32px;
+
+// ---------------- 字号 ----------------
+$font-size-xs: 12px;
+$font-size-sm: 13px;
+$font-size-base: 14px;
+$font-size-lg: 16px;
+$font-size-xl: 20px;
+$font-size-xxl: 28px;
+
+// ---------------- 布局尺寸 ----------------
+$header-height: 60px;
+$sidebar-width: 220px;
+
+// ---------------- 阴影与动效 ----------------
+$shadow-card: 0 2px 12px rgba(16, 24, 40, 0.06);
+$shadow-popup: 0 8px 28px rgba(16, 24, 40, 0.12);
+$transition-base: all 0.2s ease;
