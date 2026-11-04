@@ -22,6 +22,8 @@ public final class Constants {
     public static final String REDIS_KB_CACHE = "insure:kb:all";
     /** Redis key 前缀:登录失败次数 */
     public static final String REDIS_LOGIN_FAIL = "insure:login:fail:";
+    /** Redis key 前缀:接口限流计数 */
+    public static final String REDIS_RATE_LIMIT = "insure:rate:";
 
     /** 知识库缓存时间(秒) */
     public static final long KB_CACHE_SECONDS = 600L;

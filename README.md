@@ -18,8 +18,8 @@
 
 - [一、环境要求](#一环境要求) ｜ [二、目录结构](#二目录结构) ｜ [三、快速启动](#三快速启动)
 - [四、内置账号](#四内置账号) ｜ [五、功能说明](#五功能说明) ｜ [六、AI 能力](#六ai-能力spring-ai-alibaba--模型可配--工具自查)
-- [七、日志体系](#七日志体系可追踪--按天压缩归档) ｜ [八、已验证的联调结果](#八已验证的联调结果) ｜ [九、Nginx 部署](#九nginx-部署)
-- [十、常见问题](#十常见问题) ｜ [十一、安全提示](#十一安全提示)
+- [七、流式对话与接口防护](#七流式对话与接口防护) ｜ [八、日志体系](#八日志体系可追踪--按天压缩归档) ｜ [九、已验证的联调结果](#九已验证的联调结果)
+- [十、Docker 与 Nginx 部署](#十docker-与-nginx-部署) ｜ [十一、常见问题](#十一常见问题) ｜ [十二、安全提示](#十二安全提示)
 
 系统采用 **双入口 + 双用户体系** 架构：
 
@@ -65,23 +65,32 @@ export PATH="$JAVA_HOME/bin:$PATH"
 
 ```
 insurance-ai-service/
+├── docker-compose.yml                 # 一键启动:mysql + redis + backend + web
+├── .env.example                       # 环境变量模板(复制为 .env 后填写)
+├── deploy/nginx.conf                  # 站点配置(含 SSE 关闭缓冲、SPA 回退、安全头)
+├── scripts/ci.sh                      # 本地一键校验(编译 / 测试 / 构建 / 密钥扫描)
+├── .github/workflows/ci.yml           # CI:后端测试、前端构建、密钥泄漏检查
 ├── sql/
 │   ├── insurance_ai.sql               # 建库建表 + 初始数据(可重复执行)
 │   └── v2_ai_model_policy_claim.sql   # 增量:AI 模型配置 + 保单/理赔(幂等,可重复执行)
 ├── docs/API.md                        # 接口清单
 ├── backend/                           # 后端(8080,上下文 /api)
-│   └── src/main/
-│       ├── java/com/insure/ai/
+│   ├── Dockerfile                     # 多阶段构建 + 非 root 运行
+│   └── src/
+│       ├── main/java/com/insure/ai/
 │       │   ├── common/
 │       │   │   ├── Result / ResultCode / PageResult / BusinessException
 │       │   │   ├── GlobalExceptionHandler / BaseEntity / PageQuery / Constants
+│       │   │   ├── annotation/RateLimit.java      # 接口限流注解
 │       │   │   ├── filter/TraceIdFilter.java      # 链路追踪 traceId
+│       │   │   ├── serializer/                    # 证件号 / 手机号脱敏序列化器
 │       │   │   ├── util/AesCryptoUtil.java        # AES-256-GCM(API Key 加密)
+│       │   │   ├── util/DesensitizeUtil.java      # 展示层脱敏
 │       │   │   └── enums/                          # UserType / MenuType / ChatRole / AiProvider / Policy...
 │       │   ├── config/                             # Security / MyBatis-Plus / Redis / Async / AdminInitializer
 │       │   │                                       # + CryptoConfig(主密钥) / AiModelInitializer / OpenApiConfig
 │       │   ├── security/                           # JwtUtils / JwtAuthenticationFilter / LoginAttemptService
-│       │   ├── aspect/                             # 操作日志、危险参数拦截
+│       │   ├── aspect/                             # 操作日志、危险参数拦截、限流切面
 │       │   └── modules/
 │       │       ├── system/
 │       │       │   ├── service/AdminAuthService    # 管理端登录(校验角色状态)
@@ -96,12 +105,14 @@ insurance-ai-service/
 │       │       │   ├── service/AiModelFactory      # 按库中配置构建 ChatModel(动态 baseUrl+key)
 │       │       │   └── tool/InsuranceQueryTools    # @Tool 查自己名下保单/理赔(强制登录态过滤)
 │       │       ├── policy/                         # 保单 InsPolicy / 理赔 InsClaim / 进度 InsClaimProgress
-│       │       ├── chat/                           # 会话、消息、ChatClient 调用与系统提示词
+│       │       ├── chat/                           # 会话、消息、同步 + SSE 流式对话
 │       │       └── kb/                             # 保险知识库
-│       └── resources/
-│           ├── application.yml
-│           └── logback-spring.xml                  # 按天滚动 + gz 压缩 + 异步 + traceId
+│       ├── main/resources/
+│       │   ├── application.yml
+│       │   └── logback-spring.xml                  # 按天滚动 + gz 压缩 + 异步 + traceId
+│       └── test/java/com/insure/ai/                # 30 个单元测试(脱敏/AES/JWT/越权/序列化)
 └── frontend/
+    ├── Dockerfile                     # 构建 + Nginx 运行
     ├── index.html                     # 管理端入口
     ├── mobile.html                    # 客户端手机端入口
     ├── vite.config.ts                 # 多入口 + 代理 + SCSS 注入
@@ -111,10 +122,11 @@ insurance-ai-service/
         ├── mobile/                    # ★ 客户端手机端(独立 router/stores/views/styles)
         │   ├── router/                # hash 路由:/login /chat /history /profile
         │   ├── stores/cusUser.ts
-        │   └── views/                 # LoginView / ChatView / HistoryView / ProfileView
+        │   └── views/                 # LoginView / ChatView(SSE 流式) / HistoryView / ProfileView
         ├── router/index.ts            # 管理端路由 + 菜单动态注册守卫
         ├── stores/                    # adminUser + adminMenu(菜单驱动路由)
         ├── utils/                     # request(axios 工厂) / cusRequest / auth(双 key)
+        │                              # + sse(POST + ReadableStream) / errorHandler(全局兜底)
         └── views/
             ├── login/                 # 管理端登录
             ├── admin/(dashboard|customer|user|menu|role|kb|log|model|policy)
@@ -251,7 +263,7 @@ npm run preview      # 本地预览 http://localhost:4173
 **按双用户体系分成两个分组**，页面右上角「Select a definition」切换：
 
 - `管理端接口`：`/admin/**`，47 个接口 / 10 个分组（登录认证、客户、管理员、角色、菜单、知识库、日志、概览、模型配置、保单理赔）
-- `客户端(手机 H5)接口`：`/auth/**`、`/chat/**`、`/file/**`，14 个接口 / 3 个分组
+- `客户端(手机 H5)接口`：`/auth/**`、`/chat/**`、`/file/**`，15 个接口 / 3 个分组
 
 **调试受保护接口**：
 
@@ -412,7 +424,86 @@ ChatClient.create(chatModel)
 
 ---
 
-## 七、日志体系（可追踪 · 按天压缩归档）
+## 七、流式对话与接口防护
+
+### 1. 流式输出（SSE）
+
+同步接口 `POST /chat/send` 必须等模型整段生成完才返回：简单问答 1~3 秒无感，
+但理赔多轮追问、长答案经常 8~15 秒，用户只能对着静止的打字动画等待；并发一高，Tomcat 线程池很快被占满。
+
+因此新增 `POST /chat/send/stream`（`text/event-stream`）：
+
+| 事件 | 载荷 | 说明 |
+| --- | --- | --- |
+| `meta` | `{sessionId, references, category}` | 会话已创建、知识库命中项 |
+| `delta` | `{t: "增量文本"}` | 可多次，前端逐段追加 |
+| `done` | `{sessionId, messageId, model, createTime}` | 生成结束且已落库 |
+| `error` | `{message}` | 失败原因，前端提示后可重试 |
+
+几个实现要点：
+
+- **正文用 JSON 包装**（`{"t":"..."}`）而不是裸文本：模型输出里的换行如果直接进 `data` 字段，会和 SSE 的"空行分帧"语义冲突。
+- **校验与会话创建仍在请求线程同步完成**，失败时前端拿到的还是标准 JSON 错误码，不会出现"流开了但没有错误信息"。
+- **打字动画只在首字前显示**，一旦有内容就切到正文；否则文字会被动画挡住，直到结束才一次性出现（第一版实现踩过这个坑）。
+- **响应头带 `X-Accel-Buffering: no`**，即使 Nginx 漏配 `proxy_buffering off` 也能流式下发。
+- **离开页面时前端主动 `abort()`**，避免后端继续生成、白烧 token。
+
+实测（本机 DeepSeek，390 字回答）：
+
+| 时刻 | 已渲染字数 |
+| --- | --- |
+| +0.9s | 33 |
+| +1.9s | 281 |
+| +2.9s | 343（完成） |
+
+> 本地 `vite preview` 的代理会缓冲 SSE，用 `npm run dev` 或 Nginx 才看得到逐字效果。这是预览工具的限制，不是代码问题。
+
+### 2. 接口限流
+
+对话按 token 计费且耗时较长，不设上限时单个账号写个循环就能把额度烧穿，顺带占满线程池。
+
+`@RateLimit(limit, seconds, key)` + `RateLimitAspect`，Redis 固定窗口计数：
+
+```java
+@RateLimit(limit = 10, seconds = 60, key = "chat", message = "提问太频繁了，请稍后再试")
+@PostMapping("/send")
+public Result<ChatAnswerVO> send(...)
+```
+
+- 粒度是「登录用户 + 业务 key」，未登录降级为 IP；同步与流式两个入口共用 `key="chat"`，切换入口绕不过限制。
+- **Redis 异常时降级放行**：限流是保护措施，不该变成新的故障点。
+- 超限返回业务码 `429`，并给出还需等待的秒数。
+- 后台「测试模型连通性」同样受限（5 次/分钟），它会真实发起一次计费调用。
+
+实测：同一账号连续请求，第 1~10 次正常，第 11 次起返回 `429`。
+
+### 3. 敏感字段出口脱敏
+
+库里存的是明文证件号与手机号，**脱敏必须由输出环节保证**。
+演示数据写成 `3301**********1234` 看着安全，但那只是录入时人工打的码——
+真正对接业务库后，全量证件号会原样下发到浏览器。
+
+现在改为在实体字段上声明序列化器：
+
+```java
+@JsonSerialize(using = IdCardSerializer.class)
+private String insuredIdCard;
+
+@JsonSerialize(using = PhoneSerializer.class)
+private String customerPhone;
+```
+
+列表、详情、AI 工具返回统一生效，不依赖调用方自觉。
+实测：把库中该字段改成完整号 `330102199001011234`，接口返回仍是 `3301**********1234`；手机号 `13900000001` 返回 `139****0001`。
+
+### 4. 消息分页
+
+`GET /chat/sessions/{id}/messages` 改为分页返回（默认 50 条/页，上限 200），
+从最新往回翻、`records` 内部翻回正序，前端可直接渲染。会话攒到几百条时不再一次性全量下发。
+
+---
+
+## 八、日志体系（可追踪 · 按天压缩归档）
 
 配置文件：`backend/src/main/resources/logback-spring.xml`
 
@@ -444,7 +535,7 @@ backend/logs/
 
 ---
 
-## 八、已验证的联调结果
+## 九、已验证的联调结果
 
 以下均在本机实际运行验证（MySQL 8 + Redis + DeepSeek 真实调用）：
 
@@ -467,40 +558,87 @@ backend/logs/
 | AI 越权防护 | ✅ 用他人保单号提问被拒绝，不泄露存在性 |
 | 模型配置加密 | ✅ `ai_model_config.api_key` 为密文，接口仅返回 `sk-****cdef` |
 | 模型配置热生效 | ✅ 后台改 Key / 模型后下一次提问即生效，未重启 |
-| Swagger 分组 | ✅ `admin-api` 47 个接口 / `client-api` 14 个接口；登录接口无锁 |
+| Swagger 分组 | ✅ `admin-api` 47 个接口 / `client-api` 15 个接口；登录接口无锁 |
 | 前端类型检查 / 构建 | ✅ `vue-tsc --noEmit` 零报错，`vite build` 产出 `index.html` + `mobile.html` |
 | 双端页面渲染 | ✅ 手机端 390×844 无横向溢出；管理端各页面正常 |
 | 后台表格布局 | ✅ 保单/理赔/模型页列宽实测填满容器（1116px），无固定列遮挡、无日期或金额折行 |
+| 流式对话（SSE） | ✅ 390 字回答在 +0.9s 渲染 33 字、+1.9s 281 字、+2.9s 完成，事件为 meta + 155 个 delta + done |
+| 流式模式下的工具调用 | ✅ 流式返回同样能调用保单查询，答复与后台数据一致 |
+| 接口限流 | ✅ 同一账号第 1~10 次正常，第 11 次起返回 `429 提问太频繁了，请稍后再试` |
+| 敏感字段脱敏 | ✅ 库中存 `330102199001011234`，接口返回 `3301**********1234`；手机号 `139****0001` |
+| 消息分页 | ✅ `?pageNum=1&pageSize=4` 返回 `total` 与正序 `records` |
+| 健康检查 | ✅ `/api/actuator/health` 匿名返回 `{"status":"UP"}`；`/actuator/metrics` 匿名访问被拦截 |
+| 单元测试 | ✅ 30 个用例全绿（脱敏 / AES / JWT / 实体序列化 / 工具越权防护），JaCoCo 报告在 `backend/target/site/jacoco/` |
 
 ---
 
-## 九、Nginx 部署
+## 十、Docker 与 Nginx 部署
+
+### 1. 一键启动（推荐）
+
+```bash
+cp .env.example .env        # 填 MYSQL_ROOT_PASSWORD / INSURE_JWT_SECRET / INSURE_CRYPTO_SECRET
+docker compose up -d --build
+```
+
+| 服务 | 说明 | 是否对外 |
+| --- | --- | --- |
+| `web` | Nginx + 前端静态产物，`WEB_PORT`（默认 80） | ✅ 唯一暴露端口 |
+| `backend` | Spring Boot，容器内 8080 | ❌ |
+| `mysql` | MySQL 8，首次启动自动执行 `sql/*.sql` | ❌ |
+| `redis` | Redis 7，AOF 持久化 | ❌ |
+
+- 日志与上传文件挂到 `./data/logs`、`./data/upload`，容器重建不丢。
+- `backend` 依赖 `mysql`/`redis` 的 healthcheck 通过后才启动；`web` 依赖 `backend` 健康。
+- 后端镜像以非 root 用户运行，健康检查走 `/api/actuator/health`。
+- 访问：管理端 `http://localhost`，手机端 `http://localhost/mobile.html`。
+
+### 2. 手工部署（已有 Nginx / 需要接入行内网关）
+
+```bash
+# 后端
+cd backend && mvn -DskipTests clean package
+java -jar target/insurance-ai-service.jar
+
+# 前端
+cd frontend && npm ci && npm run build   # 产物在 dist/
+```
+
+Nginx 直接使用仓库内的 `deploy/nginx.conf`（已包含下面这些必须项），把 `backend:8080` 改成实际地址即可：
 
 ```nginx
-server {
-    listen 80;
-    server_name your-domain.com;
-    root /var/www/insurance-ai/dist;
+# 关键：SSE 必须单独配置并关闭缓冲，否则流式会退化成"等十几秒一次性返回"
+location = /api/chat/send/stream {
+    proxy_pass http://127.0.0.1:8080/api/chat/send/stream;
+    proxy_http_version 1.1;
+    proxy_set_header Connection '';
+    proxy_buffering off;
+    proxy_cache off;
+    proxy_read_timeout 300s;
+    gzip off;
+}
 
-    # 管理端（history 路由）与手机端（hash 路由）共用 index.html 回退
-    location / {
-        try_files $uri $uri/ /index.html;
-    }
+location /api/ {
+    proxy_pass http://127.0.0.1:8080/api/;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+}
 
-    location /api/ {
-        proxy_pass http://127.0.0.1:8080/api/;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Trace-Id $request_id;   # 可选:接入网关链路 ID
-    }
+# 管理端是 history 路由，未命中的路径必须回落到 index.html，否则刷新子页面 404
+location / {
+    try_files $uri $uri/ /index.html;
 }
 ```
 
-手机端使用 hash 路由，即使不做回退也能直接打开 `http://your-domain.com/mobile.html`。
+> `deploy/nginx.conf` 另外处理了：静态资源长缓存、HTML 不缓存、`gzip` 不含 `text/event-stream`、
+> 安全响应头（`X-Content-Type-Options` / `X-Frame-Options` / `Referrer-Policy`）、`/healthz` 探活。
+
+手机端使用 hash 路由，`http://your-domain.com/mobile.html` 可直接打开，不依赖回退规则。
 
 ---
 
-## 十、常见问题
+## 十一、常见问题
 
 1. **编译报 `invalid target release: 17`**
    `JAVA_HOME` 仍指向 JDK 8，切换后 `mvn clean` 重试。
@@ -533,13 +671,28 @@ server {
 10. **手机端页面在 PC 上被拉窄**
     设计如此：`max-width: 480px` 居中模拟手机；用浏览器设备模拟器切到 iPhone 尺寸查看更准确。
 
+11. **流式回答不是逐字出现，而是等一会儿一次性全出来**
+    99% 是代理层缓冲。Nginx 需对该响应关闭 `proxy_buffering`（`deploy/nginx.conf` 已配，且后端也带了 `X-Accel-Buffering: no`）。
+    本地用 `npm run preview` 也会出现，那是 vite preview 的代理缓冲，换 `npm run dev` 或直接用 Nginx 验证。
+
+12. **提问弹「提问太频繁了」**
+    对话接口限流 10 次/分钟（同步与流式共用计数），等一分钟后自动恢复。
+    阈值在 `ChatController` 的 `@RateLimit` 上，按实际业务量调整；Redis 不可用时该限制会自动放行。
+
+13. **后台看到的证件号是 `3301**********1234`**
+    这是设计行为：`InsPolicy.insuredIdCard` 上挂了脱敏序列化器，出口一律打码，与库里存的是否明文无关。
+    确实需要查看完整号码时，应另开受权限控制、带审计日志的专用接口，不要直接去掉注解。
+
 ---
 
-## 十一、安全提示
+## 十二、安全提示
 
 - **仓库内不含任何真实密钥**：`application.yml` 里全部是 `${ENV:默认值}` 占位，真实值靠环境变量或 `application-local.yml`（已 gitignore）注入。
 - **`INSURE_CRYPTO_SECRET` 是 API Key 加密主密钥**，未配置时会退化为内置默认值并打印告警，等于没加密。**配置后不可变更**，变更会导致库中已有密文无法解密，需逐条重录。
 - **`INSURE_JWT_SECRET` 生产必须更换**，默认值仅供本地开发；长度 ≥ 32 字节。
+- **敏感字段出口脱敏**：证件号、手机号由序列化器强制打码，不依赖录入数据时人工处理。
+- **对话接口已限流**：按登录用户计数，Redis 异常时降级放行（限流是保护措施，不该成为新故障点）。
+- **健康检查只放行 `/actuator/health`**：`metrics` 等端点仍需登录，不对外暴露 JVM 与连接池细节。
 - 生产/内网交付时关闭 Swagger（见「三、6」），避免暴露内部接口清单。
 - 生产环境建议下调 SQL 日志级别；`logging.level.com.insure.ai=info`。
 - 日志目录 `backend/logs/` 已加入 `.gitignore`，不要提交归档文件。
@@ -550,11 +703,11 @@ server {
 
 ---
 
-## 十二、开源协议
+## 十三、开源协议
 
 本项目基于 [MIT License](LICENSE) 发布，可自由用于商业项目、修改与再分发，仅需保留版权与许可声明。
 
-## 十三、免责声明
+## 十四、免责声明
 
 - 本项目为**技术演示与二次开发底座**，不构成任何保险销售、核保或理赔结论；接入生产前请完成合规评审、等保测评与业务系统对接。
 - 大模型的回答存在不确定性。项目已通过「工具调用只查真实业务库 + 系统提示词约束 + 强制按登录态过滤」降低幻觉与越权风险，但**不能替代人工复核**，涉及赔付结论的场景务必保留人工确认环节。
@@ -562,8 +715,16 @@ server {
 
 ## 贡献
 
-欢迎提 Issue / PR。提交前请确认：
+欢迎提 Issue / PR。提交前请跑一遍本地校验（等价于 CI）：
 
-1. `cd frontend && npx vue-tsc --noEmit && npx vite build` 通过；
-2. `cd backend && mvn -q compile` 通过；
-3. **不要提交任何真实密钥、客户数据或数据库备份**，敏感配置请走环境变量。
+```bash
+bash scripts/ci.sh
+```
+
+它依次检查：后端编译 → 30 个单元测试 → 前端类型检查 + 生产构建 → 硬编码密钥扫描。
+
+另外请注意：
+
+1. **不要提交任何真实密钥、客户数据或数据库备份**，敏感配置请走环境变量；
+2. 新增敏感字段时，记得在实体上挂 `@JsonSerialize(using = ...Serializer.class)` 并补一条序列化断言；
+3. 新增会调用大模型或按量计费的接口时，记得加 `@RateLimit`。

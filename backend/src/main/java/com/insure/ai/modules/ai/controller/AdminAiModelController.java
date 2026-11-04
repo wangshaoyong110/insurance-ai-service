@@ -2,6 +2,7 @@ package com.insure.ai.modules.ai.controller;
 
 import com.insure.ai.aspect.Log;
 import com.insure.ai.common.Result;
+import com.insure.ai.common.annotation.RateLimit;
 import com.insure.ai.modules.ai.dto.AiModelSaveDTO;
 import com.insure.ai.modules.ai.dto.AiModelTestDTO;
 import com.insure.ai.modules.ai.entity.AiModelConfig;
@@ -98,8 +99,10 @@ public class AdminAiModelController {
 
     /**
      * 连通性测试
+     * <p>会真实发起一次模型调用并产生费用，限 5 次/分钟</p>
      */
     @Log(module = "系统管理-模型配置", operation = "测试模型连通性")
+    @RateLimit(limit = 5, seconds = 60, message = "测试过于频繁，请稍后再试")
     @PostMapping("/test")
     public Result<Map<String, Object>> test(@RequestBody AiModelTestDTO dto) {
         return Result.success(aiModelConfigService.test(dto));

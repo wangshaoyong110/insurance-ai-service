@@ -11,7 +11,7 @@
 | 分组 | JSON 地址 | 覆盖范围 |
 | --- | --- | --- |
 | 管理端接口 | `/api/v3/api-docs/admin-api` | `/admin/**`（47 个接口 / 10 个分组） |
-| 客户端(手机 H5)接口 | `/api/v3/api-docs/client-api` | `/auth/**`、`/chat/**`、`/file/**`（14 个接口 / 3 个分组） |
+| 客户端(手机 H5)接口 | `/api/v3/api-docs/client-api` | `/auth/**`、`/chat/**`、`/file/**`（15 个接口 / 3 个分组） |
 
 调试步骤：先调 `/admin/auth/login` 或 `/auth/login` 取 `data.token` → 点 UI 右上角 **Authorize** 填入 token（无需手写 `Bearer ` 前缀）→ 再调其他接口。
 
@@ -128,8 +128,9 @@
 | POST | `/chat/sessions` | 新建空会话 | query: `title?` |
 | PUT | `/chat/sessions/{id}` | 重命名会话 | query: `title` |
 | DELETE | `/chat/sessions/{id}` | 删除会话（逻辑删除，级联消息） | - |
-| GET | `/chat/sessions/{id}/messages` | 会话消息列表 | - |
-| POST | `/chat/send` | 发送消息并获取 AI 回复 | body: `{ sessionId?, content }` |
+| GET | `/chat/sessions/{id}/messages` | 会话消息分页（从最新往回翻） | query: `pageNum=1`, `pageSize=50`（上限 200） |
+| POST | `/chat/send` | 发送消息并获取 AI 回复（同步） | body: `{ sessionId?, content }` |
+| POST | `/chat/send/stream` | 发送消息并流式返回（SSE） | body: `{ sessionId?, content }` |
 
 `/chat/send` 响应 `data`：
 
@@ -146,6 +147,52 @@
 - `content` 上限 1000 字，超过返回 `3004`。
 - 命中知识库时 `references` 返回被引用的标准问题，分类取首条命中条目。
 - 同一会话携带最近 10 条历史消息作为上下文（`insure.deepseek.history-size`）。
+- 接口限流 **10 次/分钟**（同步与流式共用计数），超限返回 `429`。
+
+`/chat/sessions/{id}/messages` 响应 `data` 为分页结构（`records` 内部已按时间正序，可直接渲染）：
+
+```json
+{
+  "records": [
+    { "id": 1, "sessionId": 2, "role": "user", "content": "退保能退多少钱?", "createTime": "2026-11-04 10:00:00" },
+    { "id": 2, "sessionId": 2, "role": "assistant", "content": "...", "model": "deepseek-chat", "tokens": 320 }
+  ],
+  "total": 12,
+  "pageNum": 1,
+  "pageSize": 50
+}
+```
+
+### 流式接口 `POST /chat/send/stream`
+
+响应 `Content-Type: text/event-stream`，按 SSE 规范分帧，事件顺序为 `meta` → `delta`（多次）→ `done` 或 `error`：
+
+```
+event:meta
+data:{"sessionId":10,"references":[],"category":"OTHER"}
+
+event:delta
+data:{"t":"您好"}
+
+event:delta
+data:{"t":"！"}
+
+event:done
+data:{"sessionId":10,"messageId":21,"model":"deepseek-chat","createTime":"2026-11-04T18:12:33"}
+```
+
+| 事件 | 载荷 | 说明 |
+| --- | --- | --- |
+| `meta` | `{sessionId, references, category}` | 会话已创建（新会话时用它接管 ID） |
+| `delta` | `{t}` | 增量文本，正文用 JSON 包装以规避换行与分帧冲突 |
+| `done` | `{sessionId, messageId, model, createTime}` | 生成结束且已落库 |
+| `error` | `{message}` | 失败原因，前端提示后可重试 |
+
+调用前需已完成参数校验，因此校验类错误仍返回普通 JSON（如 `3004`、`429`），不会先建立事件流。
+
+> 鉴权沿用 `Authorization: Bearer <token>`。浏览器侧不要用 `EventSource`（无法自定义请求头），
+> 用 `fetch` + `ReadableStream`，参考 `frontend/src/utils/sse.ts`。
+> 反向代理必须对该响应关闭缓冲（`proxy_buffering off`），否则会退化为一次性返回。
 
 ## 四、后台-客户 `/admin/customer`
 

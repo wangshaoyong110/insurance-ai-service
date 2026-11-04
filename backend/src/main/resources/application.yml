@@ -24,10 +24,10 @@ spring:
   # ---------------- Redis ----------------
   data:
     redis:
-      host: 127.0.0.1
-      port: 6379
-      database: 0
-      password:
+      host: ${REDIS_HOST:127.0.0.1}
+      port: ${REDIS_PORT:6379}
+      database: ${REDIS_DATABASE:0}
+      password: ${REDIS_PASSWORD:}
       timeout: 5000ms
       lettuce:
         pool:
@@ -93,6 +93,9 @@ insure:
       - /v3/api-docs/**
       - /swagger-ui/**
       - /swagger-ui.html
+      # 健康检查:供容器编排/负载均衡探活,只暴露 status,不含细节
+      - /actuator/health
+      - /actuator/health/**
   deepseek:
     base-url: https://api.deepseek.com
     # 仅用于首次启动时把配置迁移到数据表 ai_model_config(加密落库)
@@ -130,6 +133,25 @@ springdoc:
   default-produces-media-type: application/json
   cache:
     disabled: true
+
+# ---------------- 健康检查 / 指标 ----------------
+# /api/actuator/health 已加入安全白名单,供容器健康检查与负载均衡探活使用
+# 细节(数据库/Redis/磁盘)只在带凭证访问时返回,避免对内网暴露拓扑信息
+management:
+  endpoints:
+    web:
+      base-path: /actuator
+      exposure:
+        # 不开放 env/heapdump 等敏感端点
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: when_authorized
+      probes:
+        enabled: true
+  health:
+    redis:
+      enabled: true
 
 # ---------------- 日志 ----------------
 # 具体滚动与压缩策略见 resources/logback-spring.xml

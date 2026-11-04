@@ -1,0 +1,102 @@
+# 安鑫保险智能客服 · 一键启动
+# 用法:
+#   1) cp .env.example .env  并填写密钥
+#   2) docker compose up -d --build
+#   3) 打开 http://localhost  （管理端）/ http://localhost/mobile.html（手机端）
+#
+# 只暴露 80 端口，MySQL / Redis / 后端均不对外，符合内网私有化交付要求。
+name: insurance-ai
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: insurance-ai-mysql
+    restart: unless-stopped
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_general_ci
+      - --default-time-zone=+08:00
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-insurance_ai}
+      TZ: Asia/Shanghai
+    volumes:
+      - mysql-data:/var/lib/mysql
+      # 首次启动自动执行 sql/ 下的初始化脚本（按文件名顺序，v2 排在主脚本之后）
+      - ./sql:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 40s
+    networks: [insurance-net]
+
+  redis:
+    image: redis:7-alpine
+    container_name: insurance-ai-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "allkeys-lru"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+    networks: [insurance-net]
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: insurance-ai-backend
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      TZ: Asia/Shanghai
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-insurance_ai}
+      MYSQL_USERNAME: root
+      MYSQL_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      # 以下三项必须显式提供，缺失时启动会打印告警（JWT 用默认值、API Key 无法解密）
+      INSURE_JWT_SECRET: ${INSURE_JWT_SECRET:?请在 .env 中设置 INSURE_JWT_SECRET（长度 >= 32）}
+      INSURE_CRYPTO_SECRET: ${INSURE_CRYPTO_SECRET:?请在 .env 中设置 INSURE_CRYPTO_SECRET（AES 主密钥，配置后不可变更）}
+      # 可选：仅在数据库没有模型配置时用于初始化首条记录，之后以后台配置为准
+      INSURE_DEEPSEEK_API_KEY: ${INSURE_DEEPSEEK_API_KEY:-}
+      # 内网交付建议关闭接口文档
+      SPRINGDOC_API_DOCS_ENABLED: ${SPRINGDOC_API_DOCS_ENABLED:-true}
+      SPRINGDOC_SWAGGER_UI_ENABLED: ${SPRINGDOC_SWAGGER_UI_ENABLED:-true}
+    volumes:
+      # 日志与上传文件落宿主机，容器重建不丢
+      - ./data/logs:/app/logs
+      - ./data/upload:/app/upload
+    networks: [insurance-net]
+
+  web:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    container_name: insurance-ai-web
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${WEB_PORT:-80}:80"
+    networks: [insurance-net]
+
+volumes:
+  mysql-data:
+  redis-data:
+
+networks:
+  insurance-net:
+    driver: bridge

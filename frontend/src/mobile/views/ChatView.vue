@@ -1,13 +1,14 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { getCategoriesApi, getMessagesApi, sendMessageApi } from '@/api';
+import { ElMessage } from 'element-plus';
+import { getCategoriesApi, getMessagesApi, sendMessageStreamApi } from '@/api';
 import { useCusUserStore } from '@/mobile/stores/cusUser';
 import type { CategoryItem, ChatMessageItem } from '@/types';
 
 /**
  * 客户端在线咨询页
- * <p>支持快捷提问、连续多轮对话、历史会话回看</p>
+ * <p>支持快捷提问、连续多轮对话、历史会话回看；回复通过 SSE 流式逐字渲染</p>
  */
 const route = useRoute();
 const router = useRouter();
@@ -19,14 +20,21 @@ const sessionId = ref<number | null>(null);
 const messages = ref<ChatMessageItem[]>([]);
 /** 输入内容 */
 const input = ref('');
-/** 发送中 */
+/** 发送中(含流式输出期间) */
 const sending = ref(false);
+/** 正在流式输出的占位气泡 ID(用于显示打字动画) */
+const streamingPlaceholderId = ref<number | null>(null);
 /** 加载历史中 */
 const loadingHistory = ref(false);
 /** 业务分类(快捷提问) */
 const categories = ref<CategoryItem[]>([]);
 /** 消息滚动容器 */
 const scrollRef = ref<HTMLElement>();
+
+/** 流式请求中断控制器(离开页面时断开,避免后端白跑) */
+let streamController: AbortController | null = null;
+/** 滚动节流句柄(逐字输出时每帧都滚会明显掉帧) */
+let scrollTimer = 0;
 
 /** 是否展示欢迎区(无消息且非加载中) */
 const showWelcome = computed<boolean>(() => !loadingHistory.value && messages.value.length === 0);
@@ -48,7 +56,7 @@ const quickQuestions = computed<string[]>(() => {
 });
 
 /**
- * 滚动到底部
+ * 滚动到底部(节流,避免流式逐字输出时每帧都强制布局)
  */
 async function scrollToBottom(): Promise<void> {
   await nextTick();
@@ -58,8 +66,23 @@ async function scrollToBottom(): Promise<void> {
   }
 }
 
+function scheduleScrollToBottom(): void {
+  if (scrollTimer) {
+    return;
+  }
+  scrollTimer = window.setTimeout(() => {
+    scrollTimer = 0;
+    void scrollToBottom();
+  }, 80);
+}
+
 /**
- * 发送消息
+ * 发送消息(流式)
+ * <p>
+ * 先乐观插入用户消息与空的 AI 占位气泡，模型每吐一段就往占位气泡追加，
+ * 失败时整体回滚并回填输入框。这样用户 1 秒内就能看到第一个字，
+ * 而不是对着一个静止的打字动画等十几秒。
+ * </p>
  */
 async function handleSend(): Promise<void> {
   const content = input.value.trim();
@@ -67,28 +90,80 @@ async function handleSend(): Promise<void> {
     return;
   }
   sending.value = true;
+
   const localUserMessage: ChatMessageItem = {
-    id: Date.now(),
+    id: -Date.now(),
     sessionId: sessionId.value ?? 0,
     role: 'user',
     content,
     createTime: new Date().toISOString(),
   };
   messages.value.push(localUserMessage);
+
+  const placeholderId = localUserMessage.id - 1;
+  messages.value.push({
+    id: placeholderId,
+    sessionId: sessionId.value ?? 0,
+    role: 'assistant',
+    content: '',
+    createTime: new Date().toISOString(),
+  });
+  const placeholderIndex = messages.value.length - 1;
+  streamingPlaceholderId.value = placeholderId;
+
   input.value = '';
   await scrollToBottom();
 
+  let failed = false;
+  const controller = new AbortController();
+  streamController = controller;
+
   try {
-    const result = await sendMessageApi({ sessionId: sessionId.value, content });
-    sessionId.value = result.sessionId;
-    messages.value.push(result.answer);
-    await scrollToBottom();
+    await sendMessageStreamApi(
+      { sessionId: sessionId.value, content },
+      {
+        onMeta: (meta) => {
+          // 新会话由后端创建，这里接管其 ID，后续轮次才能续上上下文
+          sessionId.value = meta.sessionId;
+        },
+        onDelta: (text) => {
+          const item = messages.value[placeholderIndex];
+          if (item) {
+            item.content += text;
+            scheduleScrollToBottom();
+          }
+        },
+        onDone: () => {
+          // 不把临时 id 换成真实 messageId：改 key 会让 v-for 重建节点，
+          // 流式刚结束时容易出现滚动跳动。真实 id 在重新进入该会话时由后端下发。
+          streamingPlaceholderId.value = null;
+          void scrollToBottom();
+        },
+        onError: (message) => {
+          failed = true;
+          ElMessage.error(message);
+        },
+      },
+      controller.signal,
+    );
   } catch {
-    // 失败时移除乐观消息并回填输入框,便于重试
-    messages.value = messages.value.filter((item) => item.id !== localUserMessage.id);
-    input.value = content;
+    // 中断(离开页面)不提示；网络异常给一次提示
+    if (!controller.signal.aborted) {
+      failed = true;
+      ElMessage.error('网络异常，请稍后重试');
+    }
   } finally {
+    streamController = null;
+    streamingPlaceholderId.value = null;
     sending.value = false;
+  }
+
+  if (failed) {
+    // 回滚乐观插入的两条消息，并把问题回填输入框便于重试
+    messages.value = messages.value.filter(
+      (item) => item.id !== placeholderId && item.id !== localUserMessage.id,
+    );
+    input.value = content;
   }
 }
 
@@ -125,8 +200,8 @@ function handleKeydown(event: KeyboardEvent): void {
 async function loadHistory(id: number): Promise<void> {
   loadingHistory.value = true;
   try {
-    const list = await getMessagesApi(id);
-    messages.value = list.filter((item) => String(item.role) !== 'system');
+    const page = await getMessagesApi(id);
+    messages.value = page.records.filter((item) => String(item.role) !== 'system');
     sessionId.value = id;
     await scrollToBottom();
   } finally {
@@ -162,6 +237,14 @@ onMounted(async () => {
   const id = Number(route.query.sessionId);
   if (id) {
     await loadHistory(id);
+  }
+});
+
+onBeforeUnmount(() => {
+  // 主动断开 SSE，避免用户离开后后端继续生成、白白消耗 token
+  streamController?.abort();
+  if (scrollTimer) {
+    window.clearTimeout(scrollTimer);
   }
 });
 </script>
@@ -223,18 +306,12 @@ onMounted(async () => {
             <el-icon v-if="item.role === 'assistant'"><Service /></el-icon>
             <el-icon v-else><User /></el-icon>
           </div>
-          <div class="message__bubble">
-            <p class="message__content">{{ item.content }}</p>
-          </div>
-        </div>
-
-        <!-- 输入中 -->
-        <div v-if="sending" class="message message--assistant">
-          <div class="message__avatar">
-            <el-icon><Service /></el-icon>
-          </div>
-          <div class="message__bubble message__bubble--typing">
-            <span></span><span></span><span></span>
+          <div class="message__bubble" :class="{ 'message__bubble--typing': item.id === streamingPlaceholderId && !item.content }">
+            <!-- 首字到达前显示打字动画；一旦有内容就切到正文，实现逐字出现 -->
+            <div v-if="item.id === streamingPlaceholderId && !item.content" class="typing-dots">
+              <span></span><span></span><span></span>
+            </div>
+            <p v-else class="message__content">{{ item.content }}</p>
           </div>
         </div>
       </div>
@@ -417,25 +494,29 @@ onMounted(async () => {
   }
 
   &__bubble--typing {
-    display: flex;
-    align-items: center;
-    gap: 5px;
     padding: 15px 16px;
+  }
+}
 
-    span {
-      width: 6px;
-      height: 6px;
-      border-radius: 50%;
-      background: #b3c7e0;
-      animation: typing 1.2s infinite ease-in-out;
+/* 首字到达前的等待动画 */
+.typing-dots {
+  display: flex;
+  align-items: center;
+  gap: 5px;
 
-      &:nth-child(2) {
-        animation-delay: 0.15s;
-      }
+  span {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #b3c7e0;
+    animation: typing 1.2s infinite ease-in-out;
 
-      &:nth-child(3) {
-        animation-delay: 0.3s;
-      }
+    &:nth-child(2) {
+      animation-delay: 0.15s;
+    }
+
+    &:nth-child(3) {
+      animation-delay: 0.3s;
     }
   }
 }

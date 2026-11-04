@@ -1,0 +1,38 @@
+# 构建上下文排除项：保证镜像只装必要内容，也避免把本地密钥带进去
+.git
+.gitignore
+.gitattributes
+.github
+.idea
+.vscode
+*.iml
+
+# 前后端产物与依赖
+backend/target
+frontend/node_modules
+frontend/dist
+frontend/.vite
+
+# 运行时数据
+data
+logs
+backend/logs
+backend/upload
+upload
+
+# 环境与密钥
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.jks
+secrets.yml
+application-local.yml
+
+# 文档与截图
+docs/images
+shots
+*.md
+LICENSE

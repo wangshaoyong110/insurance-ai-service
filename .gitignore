@@ -31,6 +31,10 @@ backend/logs/
 # ---- 本地配置 / 密钥(含真实凭据,勿提交) ----
 backend/src/main/resources/application-local.yml
 backend/src/main/resources/application-local.yaml
+# docker compose 用的 .env 含 JWT 与 AES 主密钥,只提交示例文件
+.env
+.env.*
+!.env.example
 .env.local
 .env.*.local
 frontend/.env.local
@@ -39,6 +43,9 @@ frontend/.env.local
 *.p12
 *.jks
 secrets.yml
+
+# ---- 运行时数据(docker compose 挂载的日志/上传) ----
+data/
 
 # ---- 构建与临时产物 ----
 *.zip

@@ -5,7 +5,10 @@ import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import com.fasterxml.jackson.annotation.JsonFormat;
+import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 import com.insure.ai.common.BaseEntity;
+import com.insure.ai.common.serializer.IdCardSerializer;
+import com.insure.ai.common.serializer.PhoneSerializer;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 
@@ -48,7 +51,11 @@ public class InsPolicy extends BaseEntity {
     /** 被保人姓名 */
     private String insuredName;
 
-    /** 被保人证件号(脱敏) */
+    /**
+     * 被保人证件号
+     * <p>库中明文存储，出口一律由 {@link IdCardSerializer} 打码，避免对接真实业务库后敏感信息直发前端</p>
+     */
+    @JsonSerialize(using = IdCardSerializer.class)
     private String insuredIdCard;
 
     /** 年缴保费 */
@@ -81,6 +88,7 @@ public class InsPolicy extends BaseEntity {
 
     /** 客户手机号(非表字段,列表回填) */
     @TableField(exist = false)
+    @JsonSerialize(using = PhoneSerializer.class)
     private String customerPhone;
 
     /** 理赔次数(非表字段,列表回填) */

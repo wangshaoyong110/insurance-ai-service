@@ -3,6 +3,7 @@ import * as ElementPlusIconsVue from '@element-plus/icons-vue';
 import MobileApp from './App.vue';
 import router from './router';
 import pinia from '@/stores';
+import { installErrorHandler } from '@/utils/errorHandler';
 import '@/styles/index.scss';
 import './styles/mobile.scss';
 
@@ -16,6 +17,9 @@ const app = createApp(MobileApp);
 Object.entries(ElementPlusIconsVue).forEach(([name, component]) => {
   app.component(name, component);
 });
+
+// 未捕获异常兜底:避免组件报错后直接白屏且用户无任何提示
+installErrorHandler(app, 'mobile');
 
 app.use(pinia);
 app.use(router);
