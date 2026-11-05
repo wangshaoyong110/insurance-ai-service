@@ -245,3 +245,57 @@ export interface AiModelTestParams {
   model?: string;
 }
 
+
+/* ---------------- 服务闭环 ---------------- */
+
+/** 工单查询参数 */
+export interface TicketQueryParams extends PageQuery {
+  /** 工单号(模糊) */
+  ticketNo?: string;
+  /** 状态:0-待处理 1-处理中 2-已完成 3-已取消 */
+  status?: number;
+  /** 转人工原因 */
+  reason?: string;
+  /** 客户关键字:姓名 / 手机号 */
+  customer?: string;
+  /** 创建时间起 yyyy-MM-dd */
+  startDate?: string;
+  /** 创建时间止 yyyy-MM-dd */
+  endDate?: string;
+}
+
+/** 工单创建参数(客户端转人工) */
+export interface TicketCreateParams {
+  sessionId?: number | null;
+  question: string;
+  category?: string;
+  reason?: string;
+  priority?: number;
+}
+
+/** 工单处理参数(管理端) */
+export interface TicketHandleParams {
+  /** 目标状态:1-处理中 2-已完成 3-已取消 */
+  status: number;
+  reply?: string;
+  priority?: number;
+}
+
+/** 评价查询参数 */
+export interface FeedbackQueryParams extends PageQuery {
+  /** 1-有用 0-没用 */
+  rating?: number;
+  reason?: string;
+  customer?: string;
+  startDate?: string;
+  endDate?: string;
+}
+
+/** 评价提交参数 */
+export interface FeedbackParams {
+  messageId: number;
+  /** 1-有用 0-没用 */
+  rating: number;
+  reason?: string;
+  content?: string;
+}

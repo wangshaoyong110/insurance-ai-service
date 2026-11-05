@@ -139,4 +139,51 @@ class InsuranceQueryToolsTest {
         verify(policyService, never()).listByCustomer(anyLong());
         verify(policyService, never()).findByCustomerAndPolicyNo(anyLong(), anyString());
     }
+
+    @Test
+    @DisplayName("已过应缴日的保单必须提示逾期，不能被“未来无缴费”掩盖")
+    void shouldReportOverduePayment() {
+        InsPolicy overdue = policy("P202403010002", "安享百万医疗保险(2024版)");
+        overdue.setNextPayDate(LocalDate.now().minusDays(10));
+        when(policyService.listOverduePayments(LOGIN_USER_ID, LocalDate.now())).thenReturn(List.of(overdue));
+        when(policyService.listUpcomingPayments(LOGIN_USER_ID, LocalDate.now(), LocalDate.now().plusDays(30)))
+                .thenReturn(List.of());
+
+        String result = tools.listUpcomingPayments(30);
+
+        assertThat(result).contains("已逾期");
+        assertThat(result).contains("P202403010002");
+        // 逾期 10 天，60 天宽限期还剩 50 天
+        assertThat(result).contains("宽限期还剩 50 天");
+        assertThat(result).doesNotContain("没有待缴保费");
+        verify(policyService).listOverduePayments(LOGIN_USER_ID, LocalDate.now());
+    }
+
+    @Test
+    @DisplayName("超过宽限期的保单要提示可能已中止并需复效")
+    void shouldWarnWhenGracePeriodExpired() {
+        InsPolicy overdue = policy("P202403010002", "安享百万医疗保险(2024版)");
+        overdue.setNextPayDate(LocalDate.now().minusDays(90));
+        when(policyService.listOverduePayments(LOGIN_USER_ID, LocalDate.now())).thenReturn(List.of(overdue));
+        when(policyService.listUpcomingPayments(LOGIN_USER_ID, LocalDate.now(), LocalDate.now().plusDays(30)))
+                .thenReturn(List.of());
+
+        String result = tools.listUpcomingPayments(null);
+
+        assertThat(result).contains("已超过 60 天宽限期");
+        assertThat(result).contains("复效");
+    }
+
+    @Test
+    @DisplayName("既无逾期也无待缴时给出明确结论")
+    void shouldReportNoPaymentWhenNothingDue() {
+        when(policyService.listOverduePayments(LOGIN_USER_ID, LocalDate.now())).thenReturn(List.of());
+        when(policyService.listUpcomingPayments(LOGIN_USER_ID, LocalDate.now(), LocalDate.now().plusDays(180)))
+                .thenReturn(List.of());
+
+        String result = tools.listUpcomingPayments(180);
+
+        assertThat(result).contains("没有待缴保费");
+        assertThat(result).contains("没有逾期未缴记录");
+    }
 }

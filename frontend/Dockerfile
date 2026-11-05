@@ -8,7 +8,8 @@ RUN npm ci || npm install
 
 COPY frontend/ ./
 # 生产构建固定用 production 模式（接口走同源 /api，由 Nginx 反代）
-RUN npm run build
+# 注意：脚本名是 build:prod，package.json 里没有 build，写成 build 会让镜像构建直接失败
+RUN npm run build:prod
 
 # ---------- 运行阶段 ----------
 FROM nginx:1.27-alpine

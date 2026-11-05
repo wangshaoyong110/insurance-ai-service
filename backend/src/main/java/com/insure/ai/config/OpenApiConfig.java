@@ -99,14 +99,15 @@ public class OpenApiConfig {
     }
 
     /**
-     * 客户端分组:{@code /auth/**}、{@code /chat/**}、{@code /file/**}
+     * 客户端分组:{@code /auth/**}、{@code /chat/**}、{@code /service/**}、{@code /file/**}
+     * <p>新增客户端模块时要同步补到这里，否则接口不会出现在 Swagger 的客户端分组里</p>
      */
     @Bean
     public GroupedOpenApi clientApi() {
         return GroupedOpenApi.builder()
                 .group("client-api")
                 .displayName("客户端(手机 H5)接口")
-                .pathsToMatch("/auth/**", "/chat/**", "/file/**")
+                .pathsToMatch("/auth/**", "/chat/**", "/service/**", "/file/**")
                 .build();
     }
 }

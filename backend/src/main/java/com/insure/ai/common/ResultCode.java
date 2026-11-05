@@ -73,6 +73,9 @@ public enum ResultCode {
     POLICY_NOT_EXIST(6006, "保单不存在"),
     CLAIM_NOT_EXIST(6007, "理赔记录不存在"),
     AI_CALL_FAILED(6008, "大模型调用失败,请稍后重试"),
+    TICKET_NOT_EXIST(6009, "工单不存在或已删除"),
+    TICKET_STATUS_INVALID(6010, "工单当前状态不允许该操作"),
+    FEEDBACK_MESSAGE_INVALID(6011, "只能评价本人的 AI 回复"),
 
     /* ---------------- 安全相关 4xxx ---------------- */
     DANGER_PARAM(4001, "请求参数包含非法字符,已被拦截"),

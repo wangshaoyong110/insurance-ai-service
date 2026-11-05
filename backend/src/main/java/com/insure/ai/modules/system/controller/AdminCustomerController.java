@@ -6,6 +6,7 @@ import com.insure.ai.common.Result;
 import com.insure.ai.modules.system.dto.CusUserQuery;
 import com.insure.ai.modules.system.dto.CusUserVO;
 import com.insure.ai.modules.system.service.CusUserService;
+import com.insure.ai.modules.system.service.CustomerProfileService;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -16,6 +17,8 @@ import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+
+import java.util.Map;
 
 /**
  * 后台客户管理控制器(管理 cus_user,与管理员账号隔离)
@@ -30,6 +33,7 @@ import org.springframework.web.bind.annotation.RestController;
 public class AdminCustomerController {
 
     private final CusUserService cusUserService;
+    private final CustomerProfileService customerProfileService;
 
     /**
      * 客户分页列表
@@ -45,6 +49,15 @@ public class AdminCustomerController {
     @GetMapping("/{id}")
     public Result<CusUserVO> detail(@PathVariable Long id) {
         return Result.success(cusUserService.detail(id));
+    }
+
+    /**
+     * 客户 360:账号 + 保单 + 理赔 + 最近会话
+     * <p>坐席处理工单前先看这一页，不必再切到保单页按姓名搜一遍</p>
+     */
+    @GetMapping("/{id}/profile")
+    public Result<Map<String, Object>> profile(@PathVariable Long id) {
+        return Result.success(customerProfileService.profile(id));
     }
 
     /**

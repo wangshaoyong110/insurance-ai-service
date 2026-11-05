@@ -23,6 +23,7 @@ import com.insure.ai.modules.chat.entity.ChatSession;
 import com.insure.ai.modules.chat.mapper.ChatMessageMapper;
 import com.insure.ai.modules.chat.mapper.ChatSessionMapper;
 import com.insure.ai.modules.kb.entity.KbQuestion;
+import com.insure.ai.modules.kb.service.GapAnalysisService;
 import com.insure.ai.modules.kb.service.KbQuestionService;
 import com.insure.ai.modules.policy.service.PolicyService;
 import jakarta.annotation.Resource;
@@ -79,10 +80,15 @@ public class ChatService {
     private static final long DEFAULT_MESSAGE_PAGE_SIZE = 50L;
     /** 消息分页上限 */
     private static final long MAX_MESSAGE_PAGE_SIZE = 200L;
+    /** 早期对话要点最多回顾几条客户提问 */
+    private static final int DIGEST_QUESTION_LIMIT = 8;
+    /** 早期对话要点中单条提问的最大长度 */
+    private static final int DIGEST_ITEM_LENGTH = 40;
 
     private final ChatSessionMapper chatSessionMapper;
     private final ChatMessageMapper chatMessageMapper;
     private final KbQuestionService kbQuestionService;
+    private final GapAnalysisService gapAnalysisService;
     private final SystemPromptBuilder systemPromptBuilder;
     private final DeepSeekProperties deepSeekProperties;
     private final AiModelFactory aiModelFactory;
@@ -174,7 +180,9 @@ public class ChatService {
         // 2. 用户消息先落库,保证即使模型调用失败也有历史记录
         saveMessage(session.getId(), cusUserId, ChatRoleEnum.USER, content, null, 0);
         // 3. 知识库召回 + 组装上下文
-        List<KbQuestion> references = kbQuestionService.recall(content, RECALL_LIMIT);
+        KbQuestionService.RecallResult recall = kbQuestionService.recallWithScore(content, RECALL_LIMIT);
+        List<KbQuestion> references = recall.items();
+        recordGapIfWeak(cusUserId, session.getId(), content, recall.bestScore());
         // 4. 调用大模型(带保单/理赔查询工具)
         AiModelConfig config = aiModelFactory.defaultConfig();
         ChatResponse response = callModel(config, cusUserId, session.getId(), references);
@@ -208,7 +216,9 @@ public class ChatService {
         validateContent(content);
         ChatSession session = resolveSession(cusUserId, dto.getSessionId(), content);
         saveMessage(session.getId(), cusUserId, ChatRoleEnum.USER, content, null, 0);
-        List<KbQuestion> references = kbQuestionService.recall(content, RECALL_LIMIT);
+        KbQuestionService.RecallResult recall = kbQuestionService.recallWithScore(content, RECALL_LIMIT);
+        List<KbQuestion> references = recall.items();
+        recordGapIfWeak(cusUserId, session.getId(), content, recall.bestScore());
         AiModelConfig config = aiModelFactory.defaultConfig();
 
         SseEmitter emitter = new SseEmitter(STREAM_TIMEOUT_MS);
@@ -227,6 +237,8 @@ public class ChatService {
         StringBuilder buffer = new StringBuilder();
         String[] modelName = {config.getModel()};
         AtomicBoolean disconnected = new AtomicBoolean(false);
+        // 流式响应的 usage 在最后一块才完整，逐块覆盖取到的最新值
+        int[] totalTokens = {0};
 
         try {
             Map<String, Object> meta = new LinkedHashMap<>();
@@ -261,8 +273,14 @@ public class ChatService {
                         break;
                     }
                 }
-                if (response.getMetadata() != null && StringUtils.hasText(response.getMetadata().getModel())) {
-                    modelName[0] = response.getMetadata().getModel();
+                if (response.getMetadata() != null) {
+                    if (StringUtils.hasText(response.getMetadata().getModel())) {
+                        modelName[0] = response.getMetadata().getModel();
+                    }
+                    Usage usage = response.getMetadata().getUsage();
+                    if (usage != null && usage.getTotalTokens() != null && usage.getTotalTokens() > 0) {
+                        totalTokens[0] = usage.getTotalTokens();
+                    }
                 }
             }
 
@@ -270,8 +288,9 @@ public class ChatService {
                     ? "抱歉,本次没有生成有效回复,请重新描述您的问题,或联系人工客服。"
                     : buffer.toString().trim();
 
+            // token 之前这里写死 0，导致后台"模型成本"统计对走流式的对话完全失真
             ChatMessage assistantMessage = saveMessage(session.getId(), cusUserId, ChatRoleEnum.ASSISTANT,
-                    answer, modelName[0], 0);
+                    answer, modelName[0], totalTokens[0]);
             updateSessionSummary(session, content, answer);
             references.forEach(item -> kbQuestionService.increaseHitCount(item.getId()));
 
@@ -279,6 +298,7 @@ public class ChatService {
             done.put("sessionId", session.getId());
             done.put("messageId", assistantMessage.getId());
             done.put("model", modelName[0]);
+            done.put("tokens", totalTokens[0]);
             done.put("createTime", LocalDateTime.now().toString());
             if (!disconnected.get()) {
                 sendEvent(emitter, "done", done);
@@ -390,6 +410,19 @@ public class ChatService {
     }
 
     /**
+     * 知识库没覆盖到时记录一条盲区
+     * <p>
+     * 判定标准是召回最高分低于关键词权重:说明只命中了零散的二字片段，
+     * 知识库里并没有真正对应这个问题的标准问答。这类问题正是运营该补的。
+     * </p>
+     */
+    private void recordGapIfWeak(Long cusUserId, Long sessionId, String content, int bestScore) {
+        if (bestScore < KbQuestionService.weakScoreThreshold()) {
+            gapAnalysisService.record(cusUserId, sessionId, content, bestScore);
+        }
+    }
+
+    /**
      * 参数校验
      */
     private void validateContent(String content) {
@@ -445,6 +478,10 @@ public class ChatService {
                 .orderByDesc(ChatMessage::getId)
                 .last("LIMIT " + historySize));
         Collections.reverse(history);
+
+        // 超出滑动窗口的早期内容不能直接丢：客户十几轮前提过的诉求，后面往往还要用
+        appendEarlierDigest(messages, sessionId, history);
+
         for (ChatMessage item : history) {
             if (!StringUtils.hasText(item.getContent())) {
                 continue;
@@ -458,6 +495,41 @@ public class ChatService {
         }
         log.debug("[智能客服] 上下文消息数={}", messages.size());
         return messages;
+    }
+
+    /**
+     * 追加早期对话要点
+     * <p>
+     * 上下文只带最近 N 条消息，长会话里更早的内容会被直接丢掉，表现为"聊了十几轮后 AI 突然失忆"。
+     * 这里把窗口之外的客户提问抽出来压成一句要点，不额外调模型、不增加 token 费用，
+     * 但足以让模型知道此前聊过哪些事。
+     * </p>
+     */
+    private void appendEarlierDigest(List<Message> messages, Long sessionId, List<ChatMessage> history) {
+        if (history.isEmpty()) {
+            return;
+        }
+        Long oldestId = history.get(0).getId();
+        List<ChatMessage> earlier = chatMessageMapper.selectList(Wrappers.<ChatMessage>lambdaQuery()
+                .eq(ChatMessage::getSessionId, sessionId)
+                .lt(ChatMessage::getId, oldestId)
+                .eq(ChatMessage::getRole, ChatRoleEnum.USER.getCode())
+                .orderByDesc(ChatMessage::getId)
+                .last("LIMIT " + DIGEST_QUESTION_LIMIT));
+        if (earlier.isEmpty()) {
+            return;
+        }
+        Collections.reverse(earlier);
+        List<String> questions = earlier.stream()
+                .map(item -> truncate(item.getContent(), DIGEST_ITEM_LENGTH))
+                .filter(StringUtils::hasText)
+                .toList();
+        if (questions.isEmpty()) {
+            return;
+        }
+        messages.add(new SystemMessage("【更早的沟通要点】客户在本次会话此前还问过:"
+                + String.join(";", questions)
+                + "。若本轮问题与之相关,请结合这些背景回答,不要重复追问已知信息。"));
     }
 
     /**

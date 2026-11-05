@@ -132,6 +132,12 @@ onMounted(async () => {
         <span class="cell__value m-ellipsis">{{ cusUserStore.userInfo?.nickname || '未设置' }}</span>
         <el-icon class="cell__arrow"><ArrowRight /></el-icon>
       </div>
+      <div class="cell" @click="router.push('/tickets')">
+        <el-icon><Tickets /></el-icon>
+        <span class="cell__label">我的工单</span>
+        <span class="cell__value m-ellipsis">转人工服务进度</span>
+        <el-icon class="cell__arrow"><ArrowRight /></el-icon>
+      </div>
       <div class="cell" @click="openPassword">
         <el-icon><Lock /></el-icon>
         <span class="cell__label">修改密码</span>

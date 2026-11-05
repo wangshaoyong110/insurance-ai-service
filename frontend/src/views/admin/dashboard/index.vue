@@ -21,11 +21,13 @@ const statistics = ref<DashboardStatistics>({
   customerCount: 0,
   enabledCustomerCount: 0,
   todayCustomerCount: 0,
+  feedback: { total: 0, good: 0, bad: 0, goodRate: null, reasonDist: {} },
+  ticket: { pending: 0, processing: 0, finished: 0, todayNew: 0, acceptRate: 0 },
 });
 
 interface StatCard {
   label: string;
-  value: number;
+  value: number | string;
   icon: string;
   color: string;
   tip: string;
@@ -62,6 +64,25 @@ const cards = computed<StatCard[]>(() => [
     tip: '启用中的标准问答数量',
   },
   {
+    label: 'AI 回答好评率',
+    // 没有评价时显示占位符,避免把"还没人评价"误读成 0 分
+    value:
+      statistics.value.feedback.goodRate === null ? '—' : `${statistics.value.feedback.goodRate}%`,
+    icon: 'Star',
+    color: '#12b76a',
+    tip:
+      statistics.value.feedback.total === 0
+        ? '客户还没有评价过回答'
+        : `共 ${statistics.value.feedback.total} 条评价，差评 ${statistics.value.feedback.bad} 条`,
+  },
+  {
+    label: '待处理工单',
+    value: statistics.value.ticket.pending,
+    icon: 'Tickets',
+    color: '#ef6820',
+    tip: `处理中 ${statistics.value.ticket.processing} 张，今日新增 ${statistics.value.ticket.todayNew} 张`,
+  },
+  {
     label: '注册客户数',
     value: statistics.value.customerCount,
     icon: 'User',
@@ -79,8 +100,10 @@ const cards = computed<StatCard[]>(() => [
 
 /** 快捷入口 */
 const shortcuts = [
+  { label: '服务工单', desc: '处理客户转人工请求', path: '/service/ticket', icon: 'Tickets' },
   { label: '客户管理', desc: '查看客户与账号状态', path: '/service/customer', icon: 'User' },
   { label: '知识库维护', desc: '补充投保、退保等语料', path: '/kb', icon: 'Reading' },
+  { label: '知识缺口', desc: '看客户问了什么答不上来', path: '/kb/gap', icon: 'Warning' },
   { label: '员工账号', desc: '新增坐席、分配角色', path: '/system/user', icon: 'Avatar' },
   { label: '菜单管理', desc: '维护后台导航与权限', path: '/system/menu', icon: 'Menu' },
   { label: '登录日志', desc: '按登录端追溯 IP 与浏览器', path: '/log/login', icon: 'Key' },

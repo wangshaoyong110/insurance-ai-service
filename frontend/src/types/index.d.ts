@@ -183,6 +183,16 @@ export interface ChatMessageItem {
   role: 'user' | 'assistant';
   content: string;
   createTime: string;
+  /**
+   * 后端真实消息ID
+   * <p>流式回复先以负数临时 id 占位，done 事件才拿到真实 id；
+   * 不直接改 id 是为了避免 v-for key 变化导致节点重建、滚动跳动</p>
+   */
+  messageId?: number;
+  /** 评价状态:1-有用 0-没用，undefined 表示未评价 */
+  feedback?: number;
+  /** 本地提示消息(转人工结果等)，不展示评价操作 */
+  notice?: boolean;
 }
 
 /** AI 回复结果 */
@@ -268,6 +278,10 @@ export interface DashboardStatistics {
   customerCount: number;
   enabledCustomerCount: number;
   todayCustomerCount: number;
+  /** AI 回答评价统计 */
+  feedback: FeedbackStatistics;
+  /** 人工工单统计 */
+  ticket: TicketStatistics;
 }
 
 /* ---------------- 保单 / 理赔 ---------------- */
@@ -418,3 +432,122 @@ export interface AiModelTestResult {
   reply: string;
 }
 
+
+/* ---------------- 服务闭环：评价与工单 ---------------- */
+
+/** 人工工单 */
+export interface TicketItem {
+  id: number;
+  /** 工单号,如 TK202611040001 */
+  ticketNo: string;
+  cusUserId: number;
+  sessionId?: number | null;
+  /** 客户问题摘要 */
+  question: string;
+  /** 业务分类 */
+  category: string;
+  /** 转人工原因 */
+  reason: string;
+  /** 状态:0-待处理 1-处理中 2-已完成 3-已取消 */
+  status: number;
+  /** 优先级:1-普通 2-紧急 */
+  priority: number;
+  handlerId?: number | null;
+  handlerName?: string | null;
+  /** 坐席回复(客户可见) */
+  reply?: string | null;
+  acceptTime?: string | null;
+  finishTime?: string | null;
+  createTime: string;
+  /** 客户展示名(管理端回填) */
+  customerName?: string;
+  /** 客户手机号(已脱敏) */
+  customerPhone?: string;
+}
+
+/** AI 回答评价 */
+export interface FeedbackItem {
+  id: number;
+  messageId: number;
+  sessionId: number;
+  cusUserId: number;
+  /** 1-有用 0-没用 */
+  rating: number;
+  /** 差评原因 */
+  reason?: string | null;
+  content?: string | null;
+  customerName?: string;
+  customerPhone?: string;
+  /** AI 回复片段 */
+  answerPreview?: string;
+  /** 评价时间 */
+  feedbackTime?: string;
+  createTime: string;
+}
+
+/** 评价统计 */
+export interface FeedbackStatistics {
+  total: number;
+  good: number;
+  bad: number;
+  /** 好评率(%),无评价时为 null */
+  goodRate: number | null;
+  reasonDist: Record<string, number>;
+}
+
+/** 工单统计 */
+export interface TicketStatistics {
+  pending: number;
+  processing: number;
+  finished: number;
+  todayNew: number;
+  /** 人工接手率(%) */
+  acceptRate: number;
+}
+
+/** 选项字典(原因/分类等) */
+export interface OptionItem {
+  code: string;
+  name: string;
+}
+
+/** 客户 360 概览指标 */
+export interface CustomerProfileSummary {
+  policyCount: number;
+  activePolicyCount: number;
+  activeCoverage: number;
+  claimCount: number;
+  openClaimCount: number;
+  sessionCount?: number;
+}
+
+/** 客户 360 视图 */
+export interface CustomerProfile {
+  customer: CusUserInfo;
+  summary: CustomerProfileSummary;
+  policies: PolicyItem[];
+  claims: ClaimItem[];
+  sessions: ChatSessionItem[];
+}
+
+/** 知识缺口聚合项 */
+export interface GapGroupItem {
+  question: string;
+  /** 出现次数 */
+  hitCount: number;
+  /** 最高召回得分,0 表示完全没命中 */
+  bestScore: number;
+  /** 0-待处理 1-已转知识 2-已忽略 */
+  status: number;
+  /** 代表记录ID,用于转知识/忽略 */
+  sampleId: number;
+  lastTime: string;
+}
+
+/** 知识缺口统计 */
+export interface GapStatistics {
+  pendingGroups: number;
+  todayRecords: number;
+  totalRecords: number;
+  topQuestions: string[];
+}

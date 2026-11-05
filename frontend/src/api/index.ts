@@ -17,3 +17,5 @@ export * from './modules/cusAuth';
 export * from './modules/cusChat';
 export * from './modules/policy';
 export * from './modules/aiModel';
+export * from './modules/service';
+export * from './modules/cusService';

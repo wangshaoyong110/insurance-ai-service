@@ -146,7 +146,8 @@
 - `sessionId` 为空时自动创建会话，标题取首条提问前 30 字。
 - `content` 上限 1000 字，超过返回 `3004`。
 - 命中知识库时 `references` 返回被引用的标准问题，分类取首条命中条目。
-- 同一会话携带最近 10 条历史消息作为上下文（`insure.deepseek.history-size`）。
+- 同一会话携带最近 10 条历史消息作为上下文（`insure.deepseek.history-size`）；超出窗口的更早提问会被压成一句「更早的沟通要点」一起带上，避免长会话失忆。
+- 知识库未命中或只有低分命中时，会往 `chat_unknown` 写一条记录，供后台「知识缺口」聚合。
 - 接口限流 **10 次/分钟**（同步与流式共用计数），超限返回 `429`。
 
 `/chat/sessions/{id}/messages` 响应 `data` 为分页结构（`records` 内部已按时间正序，可直接渲染）：
@@ -194,17 +195,65 @@ data:{"sessionId":10,"messageId":21,"model":"deepseek-chat","createTime":"2026-1
 > 用 `fetch` + `ReadableStream`，参考 `frontend/src/utils/sse.ts`。
 > 反向代理必须对该响应关闭缓冲（`proxy_buffering off`），否则会退化为一次性返回。
 
-## 四、后台-客户 `/admin/customer`
+## 四、服务闭环 `/service`（客户端）
+
+AI 答得好不好、答不了怎么办，这两件事都要有出口。
+
+| 方法 | 路径 | 说明 | 参数 |
+| --- | --- | --- | --- |
+| GET | `/service/feedback-reasons` | 差评原因字典 | - |
+| POST | `/service/feedback` | 对某条 AI 回复评价 | body: `{ messageId, rating, reason?, content? }` |
+| GET | `/service/feedback/{messageId}` | 查询本人对某条回复的评价（刷新回显） | - |
+| GET | `/service/ticket-reasons` | 转人工原因字典 | - |
+| POST | `/service/tickets` | 转人工：创建工单 | body: `{ sessionId?, question, category?, reason?, priority? }` |
+| GET | `/service/tickets` | 我的工单列表 | - |
+| PUT | `/service/tickets/{id}/cancel` | 取消本人待处理工单 | - |
+
+- `rating`：`1` 有用、`0` 没用；`0` 时建议带 `reason`：`WRONG` 信息有误 / `IRRELEVANT` 答非所问 / `INCOMPLETE` 不够完整 / `SLOW` 响应太慢 / `OTHER` 其他。
+- 同一客户对同一条消息重复评价做 **覆盖更新**（唯一键 `message_id + cus_user_id`），不会刷出多条。
+- 评价限流 **20 次/分钟**；转人工限流 **5 次/10 分钟**，避免单账号刷空单占用坐席。
+- 工单号格式 `TK` + `yyyyMMdd` + 4 位序号；`priority` `1` 普通、`2` 紧急。
+
+## 五、后台-服务工单 `/admin/ticket`
+
+| 方法 | 路径 | 说明 | 参数 |
+| --- | --- | --- | --- |
+| GET | `/admin/ticket/page` | 工单分页（回填客户姓名与脱敏手机号） | query: `ticketNo?, status?, reason?, customer?, startDate?, endDate?, pageNum, pageSize` |
+| GET | `/admin/ticket/{id}` | 工单详情 | - |
+| PUT | `/admin/ticket/{id}/handle` | 接单 / 回复结单 / 取消 | body: `{ status, reply?, priority? }` |
+| GET | `/admin/ticket/statistics` | 待处理 / 处理中 / 已完成 / 今日新增 / 人工接手率 | - |
+
+`handle` 的状态流转：`1` 处理中（记录当前登录坐席与接单时间）→ `2` 已完成（写入回复与结单时间）→ `3` 已取消。客户在手机端「我的工单」可见坐席回复。
+
+## 六、后台-回答评价 `/admin/feedback`
+
+| 方法 | 路径 | 说明 | 参数 |
+| --- | --- | --- | --- |
+| GET | `/admin/feedback/page` | 评价分页（回填客户、AI 回复片段） | query: `rating?, reason?, customer?, startDate?, endDate?, pageNum, pageSize` |
+| GET | `/admin/feedback/statistics` | 好评率、好评/差评数、差评原因分布 | - |
+
+## 七、后台-知识缺口 `/admin/kb/gap`
+
+| 方法 | 路径 | 说明 | 参数 |
+| --- | --- | --- | --- |
+| GET | `/admin/kb/gap/page` | 按问题聚合的缺口分页（次数降序，带最高召回得分） | query: `keyword?, status?, pageNum, pageSize` |
+| GET | `/admin/kb/gap/statistics` | 待处理问题数 / 今日新增记录 / 累计记录 / 高频问题 | - |
+| POST | `/admin/kb/gap/{id}/to-kb` | 一键补知识：生成知识库条目并标记已转 | body: `{ category, answer, keywords? }` |
+| PUT | `/admin/kb/gap/{id}/ignore` | 忽略（闲聊类不需要覆盖的问题） | - |
+
+## 八、后台-客户 `/admin/customer`
+
 
 | 方法 | 路径 | 说明 | 参数 |
 | --- | --- | --- | --- |
 | GET | `/admin/customer/page` | 客户分页（回填 `sessionCount`） | query: `keyword?, status?, pageNum, pageSize` |
 | GET | `/admin/customer/{id}` | 客户详情 | - |
+| GET | `/admin/customer/{id}/profile` | **客户 360**：基本信息 + 概览指标 + 保单 + 理赔 + 最近会话 | - |
 | PUT | `/admin/customer/{id}/status` | 启用/停用 | query: `status`（1/0） |
 | PUT | `/admin/customer/{id}/reset-password` | 重置密码为 `123456` | - |
 | DELETE | `/admin/customer/{id}` | 逻辑删除 | - |
 
-## 五、后台-管理员账号 `/admin/user`
+## 九、后台-管理员账号 `/admin/user`
 
 | 方法 | 路径 | 说明 | 参数 |
 | --- | --- | --- | --- |
@@ -219,7 +268,7 @@ data:{"sessionId":10,"messageId":21,"model":"deepseek-chat","createTime":"2026-1
 
 > 内置 `admin`（`SUPER_ADMIN`）不可降级、禁用或删除。
 
-## 六、后台-角色 `/admin/role`
+## 十、后台-角色 `/admin/role`
 
 | 方法 | 路径 | 说明 | 参数 |
 | --- | --- | --- | --- |
@@ -230,7 +279,7 @@ data:{"sessionId":10,"messageId":21,"model":"deepseek-chat","createTime":"2026-1
 | PUT | `/admin/role/{id}` | 编辑（`menuIds` 覆盖式保存） | body 同上 |
 | DELETE | `/admin/role/{id}` | 删除（内置角色/有账号时禁止） | - |
 
-## 七、后台-菜单 `/admin/menu`
+## 十一、后台-菜单 `/admin/menu`
 
 | 方法 | 路径 | 说明 | 参数 |
 | --- | --- | --- | --- |
@@ -241,7 +290,7 @@ data:{"sessionId":10,"messageId":21,"model":"deepseek-chat","createTime":"2026-1
 
 `menuType` 取值：`DIR` 目录、`MENU` 菜单、`BUTTON` 按钮。只有 `MENU` 且配置了 `component` 的节点会注册为前端路由。
 
-## 八、后台-知识库 `/admin/kb`
+## 十二、后台-知识库 `/admin/kb`
 
 | 方法 | 路径 | 说明 | 参数 |
 | --- | --- | --- | --- |
@@ -253,7 +302,7 @@ data:{"sessionId":10,"messageId":21,"model":"deepseek-chat","createTime":"2026-1
 
 `category`：`INSURE` 投保、`POLICY` 保全、`SURRENDER` 退保、`REDUCE` 减保、`CLAIM` 理赔、`OTHER` 其他。
 
-## 九、后台-日志 `/admin/log`
+## 十三、后台-日志 `/admin/log`
 
 | 方法 | 路径 | 说明 | 参数 |
 | --- | --- | --- | --- |
@@ -264,7 +313,7 @@ data:{"sessionId":10,"messageId":21,"model":"deepseek-chat","createTime":"2026-1
 - 操作日志字段：`module、operation、method、requestUri、requestMethod、params、ip、browser、os、operName、status、errorMsg、costTime、operTime`
 - `params` 中密码等敏感字段自动脱敏为 `***`
 
-## 十、文件 `/file`
+## 十四、文件 `/file`
 
 | 方法 | 路径 | 说明 | 参数 |
 | --- | --- | --- | --- |
@@ -273,11 +322,11 @@ data:{"sessionId":10,"messageId":21,"model":"deepseek-chat","createTime":"2026-1
 允许扩展名：`jpg/jpeg/png/gif/webp/bmp/pdf/doc/docx/xls/xlsx/ppt/pptx/txt/csv`；单文件上限 20MB。
 响应 `data`：`{ id, url, name, size }`，`url` 形如 `/api/upload/20261104/xxxx.png`。
 
-## 十一、后台-概览 `/admin/dashboard`
+## 十五、后台-概览 `/admin/dashboard`
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| GET | `/admin/dashboard/statistics` | 会话数、提问数、今日新增会话、知识库条数、后台员工数、注册客户数、启用客户数、今日新增客户 |
+| GET | `/admin/dashboard/statistics` | 会话数、提问数、今日新增会话、知识库条数、后台员工数、注册客户数、启用客户数、今日新增客户，以及**回答评价**与**工单**两组子统计 |
 响应 `data` 示例：
 
 ```json
@@ -285,13 +334,17 @@ data:{"sessionId":10,"messageId":21,"model":"deepseek-chat","createTime":"2026-1
   "questionCount": 40, "sessionCount": 12, "kbCount": 8, "todaySession": 3,
   "adminCount": 2, "adminType": "ADMIN",
   "customerCount": 1, "enabledCustomerCount": 1, "todayCustomerCount": 1,
-  "customerType": "CUSTOMER"
+  "customerType": "CUSTOMER",
+  "feedback": { "total": 1, "good": 0, "bad": 1, "goodRate": 0, "reasonDist": { "INCOMPLETE": 1 } },
+  "ticket": { "pending": 0, "processing": 0, "finished": 1, "todayNew": 1, "acceptRate": 100 }
 }
 ```
 
+> `goodRate` / `acceptRate` 在无数据时为 `null` / `0`，前端显示为「暂无评价」而不是 0%，避免误判。
+
 ---
 
-## 十二、后台-AI 模型配置 `/admin/model`
+## 十六、后台-AI 模型配置 `/admin/model`
 
 > 需要管理端 token。API Key 明文**只进不出**：提交后由后端 AES-256-GCM 加密入库，查询接口只返回掩码。
 
@@ -343,7 +396,7 @@ data:{"sessionId":10,"messageId":21,"model":"deepseek-chat","createTime":"2026-1
 
 > 生效规则：只有 **启用 + 默认** 的那一条会用于对话；保存后下一次提问立即生效，无需重启。
 
-## 十三、后台-保单理赔 `/admin/policy` `/admin/claim`
+## 十七、后台-保单理赔 `/admin/policy` `/admin/claim`
 
 > 只读接口。数据由核心业务系统同步，后台与 AI 工具读同一份表，保证答复一致。
 
@@ -388,7 +441,7 @@ data:{"sessionId":10,"messageId":21,"model":"deepseek-chat","createTime":"2026-1
 
 ---
 
-## 十四、典型调用示例
+## 十八、典型调用示例
 
 ```bash
 # ---------- 管理端 ----------
@@ -419,6 +472,39 @@ curl -s -X POST http://localhost:8080/api/chat/send \
 
 # 历史会话
 curl -s http://localhost:8080/api/chat/sessions -H "Authorization: Bearer $CUS_TOKEN"
+
+# ---------- 服务闭环 ----------
+# 评价 AI 回复(1 有用 / 0 没用)
+curl -s -X POST http://localhost:8080/api/service/feedback \
+  -H "Authorization: Bearer $CUS_TOKEN" -H "Content-Type: application/json" \
+  -d '{"messageId":42,"rating":0,"reason":"INCOMPLETE","content":"希望举个例子"}'
+
+# 转人工
+curl -s -X POST http://localhost:8080/api/service/tickets \
+  -H "Authorization: Bearer $CUS_TOKEN" -H "Content-Type: application/json" \
+  -d '{"sessionId":20,"question":"等待期多久?","reason":"COMPLEX","priority":2}'
+
+# 坐席接单 → 回复结单
+curl -s -X PUT http://localhost:8080/api/admin/ticket/1/handle \
+  -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" \
+  -d '{"status":1}'
+curl -s -X PUT http://localhost:8080/api/admin/ticket/1/handle \
+  -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" \
+  -d '{"status":2,"reply":"您的保单已过等待期"}'
+
+# 好评率 / 工单待办
+curl -s http://localhost:8080/api/admin/feedback/statistics -H "Authorization: Bearer $ADMIN_TOKEN"
+curl -s http://localhost:8080/api/admin/ticket/statistics -H "Authorization: Bearer $ADMIN_TOKEN"
+
+# ---------- 知识缺口 ----------
+curl -s "http://localhost:8080/api/admin/kb/gap/page?pageNum=1&pageSize=10" -H "Authorization: Bearer $ADMIN_TOKEN"
+# 一键补知识(会生成条目并把该问题标记为已转)
+curl -s -X POST http://localhost:8080/api/admin/kb/gap/1/to-kb \
+  -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" \
+  -d '{"category":"OTHER","answer":"...","keywords":"关键词1,关键词2"}'
+
+# 客户 360
+curl -s http://localhost:8080/api/admin/customer/1/profile -H "Authorization: Bearer $ADMIN_TOKEN"
 
 # ---------- 模型配置 ----------
 # 看配置列表(apiKey 只会是掩码)

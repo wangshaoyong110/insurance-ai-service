@@ -5,6 +5,7 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.insure.ai.common.BusinessException;
 import com.insure.ai.common.PageResult;
 import com.insure.ai.common.ResultCode;
+import com.insure.ai.common.enums.PolicyStatusEnum;
 import com.insure.ai.modules.policy.dto.ClaimDetailVO;
 import com.insure.ai.modules.policy.dto.ClaimQuery;
 import com.insure.ai.modules.policy.dto.PolicyQuery;
@@ -21,6 +22,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
+import java.time.LocalDate;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -172,6 +174,48 @@ public class PolicyService {
     }
 
     /**
+     * 当前客户名下仍有效的保单(用于保障分析)
+     * <p>有效 = 状态有效且在保障期内,已退保/满期/中止的保单不算已有保障</p>
+     */
+    public List<InsPolicy> listEffectiveByCustomer(Long cusUserId) {
+        return policyMapper.selectList(Wrappers.<InsPolicy>lambdaQuery()
+                .eq(InsPolicy::getCusUserId, cusUserId)
+                .eq(InsPolicy::getStatus, PolicyStatusEnum.EFFECTIVE.getCode())
+                .ge(InsPolicy::getExpireDate, LocalDate.now())
+                .orderByAsc(InsPolicy::getExpireDate));
+    }
+
+    /**
+     * 待缴保费:下次缴费日落在 [from, to] 区间内的有效保单
+     */
+    public List<InsPolicy> listUpcomingPayments(Long cusUserId, LocalDate from, LocalDate to) {
+        return policyMapper.selectList(Wrappers.<InsPolicy>lambdaQuery()
+                .eq(InsPolicy::getCusUserId, cusUserId)
+                .eq(InsPolicy::getStatus, PolicyStatusEnum.EFFECTIVE.getCode())
+                .isNotNull(InsPolicy::getNextPayDate)
+                .ge(InsPolicy::getNextPayDate, from)
+                .le(InsPolicy::getNextPayDate, to)
+                .orderByAsc(InsPolicy::getNextPayDate));
+    }
+
+    /**
+     * 逾期未缴:应缴日已过、保单仍有效的记录
+     * <p>只查未来区间会把"已经欠缴"的保单漏掉,而这恰恰是保单中止、失效的直接原因,
+     * 所以逾期单独查一次,由上层优先提示。</p>
+     *
+     * @param cusUserId 客户ID
+     * @param today     今天
+     */
+    public List<InsPolicy> listOverduePayments(Long cusUserId, LocalDate today) {
+        return policyMapper.selectList(Wrappers.<InsPolicy>lambdaQuery()
+                .eq(InsPolicy::getCusUserId, cusUserId)
+                .eq(InsPolicy::getStatus, PolicyStatusEnum.EFFECTIVE.getCode())
+                .isNotNull(InsPolicy::getNextPayDate)
+                .lt(InsPolicy::getNextPayDate, today)
+                .orderByAsc(InsPolicy::getNextPayDate));
+    }
+
+    /**
      * 按理赔案号查询当前客户名下理赔
      */
     public InsClaim findClaimByCustomer(Long cusUserId, String claimNo) {
@@ -222,8 +266,11 @@ public class PolicyService {
         Map<Long, CusUser> userMap = loadUsers(policies.stream()
                 .map(InsPolicy::getCusUserId).filter(Objects::nonNull).collect(Collectors.toSet()));
         Map<Long, Long> countMap = new HashMap<>();
-        claimMapper.countGroupByPolicy().forEach(row ->
-                countMap.put(toLong(row.get("policyId")), toLong(row.get("claimCount"))));
+        List<Long> policyIds = policies.stream().map(InsPolicy::getId).filter(Objects::nonNull).toList();
+        if (!policyIds.isEmpty()) {
+            claimMapper.countByPolicyIds(policyIds).forEach(row ->
+                    countMap.put(toLong(row.get("policyId")), toLong(row.get("claimCount"))));
+        }
         for (InsPolicy item : policies) {
             CusUser user = userMap.get(item.getCusUserId());
             if (user != null) {

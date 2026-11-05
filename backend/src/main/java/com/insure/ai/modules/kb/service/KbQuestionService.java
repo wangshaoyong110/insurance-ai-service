@@ -98,18 +98,53 @@ public class KbQuestionService {
      * @param limit   召回条数
      */
     public List<KbQuestion> recall(String content, int limit) {
+        return recallWithScore(content, limit).items();
+    }
+
+    /**
+     * 召回并同时返回最高得分
+     * <p>
+     * 只返回列表时调用方无法区分"命中了 1 条强相关"和"靠零散二元片段勉强凑够 3 条"。
+     * 把最高分带出来，对话链路才能判断这次回答到底有没有知识库支撑，
+     * 进而决定是否记为知识盲区。
+     * </p>
+     *
+     * @param content 用户问题
+     * @param limit   召回条数
+     */
+    public RecallResult recallWithScore(String content, int limit) {
         if (!StringUtils.hasText(content)) {
-            return List.of();
+            return new RecallResult(List.of(), 0);
         }
         List<KbQuestion> all = listEnabled();
         int max = limit <= 0 ? DEFAULT_RECALL_LIMIT : limit;
-        return all.stream()
+        List<Map.Entry<KbQuestion, Integer>> scored = all.stream()
                 .map(item -> Map.entry(item, score(content, item)))
                 .filter(entry -> entry.getValue() > 0)
                 .sorted(Map.Entry.<KbQuestion, Integer>comparingByValue(Comparator.reverseOrder()))
+                .toList();
+        List<KbQuestion> items = scored.stream()
                 .limit(max)
                 .map(Map.Entry::getKey)
                 .toList();
+        int bestScore = scored.isEmpty() ? 0 : scored.get(0).getValue();
+        return new RecallResult(items, bestScore);
+    }
+
+    /**
+     * 弱命中阈值:达到该分数说明至少命中了一个关键词，才算知识库真的覆盖了这个问题
+     */
+    public static int weakScoreThreshold() {
+        return KEYWORD_WEIGHT;
+    }
+
+    /**
+     * 召回结果:条目 + 最高得分
+     *
+     * @param items     召回条目
+     * @param bestScore 最高相关度得分,0 表示完全没命中
+     */
+    public record RecallResult(List<KbQuestion> items, int bestScore) {
     }
 
     /**

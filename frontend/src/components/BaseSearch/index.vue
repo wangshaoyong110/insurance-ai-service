@@ -22,7 +22,7 @@ interface Props {
 
 const props = withDefaults(defineProps<Props>(), {
   loading: false,
-  labelWidth: '80px',
+  labelWidth: '96px',
 });
 
 const emit = defineEmits<{
@@ -121,6 +121,11 @@ function handleEnter(): void {
 
   :deep(.el-form-item) {
     margin-bottom: $spacing-md;
+  }
+
+  // 标签必须单行：中文标签多一个字就会换行，导致同一行查询项高低错位
+  :deep(.el-form-item__label) {
+    white-space: nowrap;
   }
 }
 </style>

@@ -45,6 +45,13 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/mobile/views/ProfileView.vue'),
     meta: { title: '我的', tab: true },
   },
+  {
+    // 工单进度从「我的」或咨询页进入，不占底部导航
+    path: '/tickets',
+    name: 'MobileTicket',
+    component: () => import('@/mobile/views/TicketView.vue'),
+    meta: { title: '我的工单' },
+  },
   { path: '/:pathMatch(.*)*', redirect: '/chat' },
 ];
 

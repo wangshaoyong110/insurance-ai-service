@@ -51,3 +51,5 @@ data/
 *.zip
 *.tar.gz
 *.tmp
+# 本地截图/调试脚本目录
+.tmp/

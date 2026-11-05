@@ -1,6 +1,6 @@
 import { del, get, put } from '@/utils/request';
 import type { CusUserQueryParams } from '@/types/api';
-import type { CusUserInfo, PageResult } from '@/types';
+import type { CusUserInfo, CustomerProfile, PageResult } from '@/types';
 
 /**
  * 后台客户管理接口(cus_user)
@@ -14,6 +14,11 @@ export function getCustomerPageApi(params: CusUserQueryParams): Promise<PageResu
 /** 客户详情 */
 export function getCustomerDetailApi(id: number): Promise<CusUserInfo> {
   return get<CusUserInfo>(`/admin/customer/${id}`);
+}
+
+/** 客户 360:账号 + 保单 + 理赔 + 最近会话 */
+export function getCustomerProfileApi(id: number): Promise<CustomerProfile> {
+  return get<CustomerProfile>(`/admin/customer/${id}/profile`);
 }
 
 /** 启用 / 禁用客户 */

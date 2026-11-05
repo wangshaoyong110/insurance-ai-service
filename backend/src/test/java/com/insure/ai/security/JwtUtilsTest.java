@@ -69,9 +69,13 @@ class JwtUtilsTest {
     @DisplayName("被篡改的 token 解析失败")
     void shouldRejectTamperedToken() {
         String token = jwtUtils.generateToken(sampleUser());
-        // 改掉签名段的最后一个字符
-        String tampered = token.substring(0, token.length() - 1)
-                + (token.endsWith("A") ? "B" : "A");
+        // 必须改 payload 段：签名段最后一个 base64 字符的低位是填充位，改了也可能解出同样的签名，
+        // 那样测试会偶发通过（真实校验没问题，是断言写错了）
+        String[] parts = token.split("\\.");
+        char[] payload = parts[1].toCharArray();
+        int index = payload.length / 2;
+        payload[index] = payload[index] == 'A' ? 'B' : 'A';
+        String tampered = parts[0] + "." + new String(payload) + "." + parts[2];
 
         assertThat(jwtUtils.parseToken(tampered)).isNull();
     }
