@@ -91,10 +91,10 @@ public class AiModelConfigServiceImpl implements AiModelConfigService {
             aiModelConfigMapper.updateById(entity);
         }
 
-        // 同一时刻只允许一个默认配置
+        // 同一时刻只允许一个默认配置;首个启用配置自动成为默认,避免"无默认"兜底
         if (Integer.valueOf(1).equals(entity.getIsDefault())) {
             clearOtherDefault(entity.getId());
-        } else if (!creating && isLastEnabled(entity.getId())) {
+        } else if (isLastEnabled(entity.getId())) {
             entity.setIsDefault(1);
             aiModelConfigMapper.updateById(entity);
         }
