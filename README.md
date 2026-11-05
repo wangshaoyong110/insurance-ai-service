@@ -110,7 +110,11 @@ insurance-ai-service/
 │       │       │   ├── service/AiModelFactory      # 按库中配置构建 ChatModel(动态 baseUrl+key)
 │       │       │   └── tool/InsuranceQueryTools    # @Tool 查自己名下保单/理赔(强制登录态过滤)
 │       │       ├── policy/                         # 保单 InsPolicy / 理赔 InsClaim / 进度 InsClaimProgress
-│       │       ├── chat/                           # 会话、消息、同步 + SSE 流式对话
+│       │       ├── chat/                           # 会话、消息、AI 问答、人工接管
+│       │       │   ├── service/ChatSessionService  # 会话与消息存取(CRUD + 归属校验)
+│       │       │   ├── service/ChatSendService     # 知识库召回 → 模型调用 → SSE 推送
+│       │       │   ├── service/ChatTakeoverService # AI/排队/人工 三态流转 + 双向消息
+│       │       │   └── support/ChatContextBuilder  # 上下文组装(System + 滑动窗口 + 早期要点)
 │       │       ├── kb/                             # 保险知识库 + 知识盲区
 │       │       ├── service/                        # 人工工单 + 回答评价(含 support/TicketExcelExporter 导出器)
 │       │       └── system/                         # 客户端/管理端账号、角色菜单、验证码、短信、文件上传
@@ -150,6 +154,16 @@ insurance-ai-service/
 | 手工 SQL | 一律写在 `src/main/resources/mapper/<模块>/*.xml`，Mapper 接口只留方法声明，便于 DBA 审阅与索引优化 |
 | 加解密 | 敏感字段（API Key 等）统一走 `SensitiveDataCipher`，算法为国密 SM4-GCM；账号密码则用框架自带 BCrypt，不重复造轮子 |
 | 参数绑定 | XML 中使用的多参数方法必须标注 `@Param`，避免编译期丢参数名导致运行期 `BindingException` |
+
+**会话模块的内部分层**：`ChatServiceImpl` 一度承担了会话 CRUD、消息落库、Prompt 组装、SSE 推送、人工接管状态机五件事，涨到 1000 行后改一处接管逻辑要通读整个文件。现按"数据 / 问答 / 状态"切成三个服务：
+
+| 服务 | 边界 | 不做什么 |
+| --- | --- | --- |
+| `ChatSessionService` | 会话增删改查、消息读写、归属校验（越权判断只此一处） | 不调模型、不决定服务模式 |
+| `ChatSendService` | 召回 → 组装上下文 → 调模型（挂业务工具）→ 落库 / 推流 | 不改接管状态，人工模式下只静默返回 |
+| `ChatTakeoverService` | `AI ⇄ 排队 ⇄ 人工` 三态迁移、坐席与客户的双向消息 | 不碰 AI 调用与知识库 |
+
+`ChatServiceImpl` 保留为**纯委托门面**（不含逻辑），控制器与工单模块仍只依赖 `ChatService` 一个入口——将来再细分时不必逐个改调用点。副作用是方法体变短、事务边界更清晰：`@Transactional` 只落在真正改库的实现方法上（`deleteSession` / `sendMessage` / `staffSend` / `createTakeoverSession`），`send` 仍不整体加事务，避免调模型期间占用数据库连接。
 
 ---
 
@@ -418,7 +432,7 @@ springdoc:
 - **实名认证**：`POST /auth/real-name`，提交姓名 + 证件类型 + 证件号。身份证走 **GB 11643 校验位算法**（18 位加权求和取模，`X` 兼容大小写），且**证件号里的出生日期与性别自动回填**（省得客户再填一遍，也顺带做了交叉校验）；护照等其他证件只做长度与字符集校验。姓名要求 2–20 个字且不含数字。
 - **问答闸门（两道，缺一不可）**：
   1. **工具层**（`InsuranceQueryTools`）：每个查保单 / 查理赔 / 查缴费的工具入口都有实名判断，未实名直接返回固定提示、**不查库**——即使模型被诱导去调工具也拿不到任何业务数据。
-  2. **回复层**（`ChatServiceImpl`）：未实名且本轮命中业务类问题（规则见 `RealNameGate`，覆盖“我的保单”“理赔到哪一步了”“我还要交几次保费”等问法）时，响应体带 `needRealName=true`，前端渲染成「去实名认证」卡片。
+  2. **回复层**（`ChatSendServiceImpl`）：未实名且本轮命中业务类问题（规则见 `RealNameGate`，覆盖“我的保单”“理赔到哪一步了”“我还要交几次保费”等问法）时，响应体带 `needRealName=true`，前端渲染成「去实名认证」卡片。
   未实名的客户仍可正常问投保规则、犹豫期、退保现金价值、理赔材料清单等**通用知识**，不会被一刀切拦死。
 - **标识**：个人信息页顶部显示「已实名认证」（附认证时间）或「未实名认证」，未认证时给一键跳转；`CusUserVO` 里 `certNo` 出口**打码**（`110****2X`），`realName` 全量返回供本人核对。
 
@@ -542,7 +556,7 @@ ChatClient.create(chatModel)
     .content();
 ```
 
-**长会话不失忆**：上下文只带最近 N 条消息，聊到十几轮后更早的诉求会被丢掉。`ChatService.appendEarlierDigest()` 把窗口之外的客户提问抽成一句「更早的沟通要点」注入 System，不额外调模型、不增加 token 费用。
+**长会话不失忆**：上下文只带最近 N 条消息，聊到十几轮后更早的诉求会被丢掉。`ChatContextBuilder.appendEarlierDigest()` 把窗口之外的客户提问抽成一句「更早的沟通要点」注入 System，不额外调模型、不增加 token 费用。
 
 **答不上来要留痕**：`KbQuestionService.recallWithScore()` 除了返回命中的知识条目，还返回最高召回得分；`ChatService` 在「完全没命中」或「只有低分命中」时写一条 `chat_unknown`，后台「知识缺口」页据此按频次聚合，把客户真正在问、知识库却答不上的问题暴露出来。**走工具查到业务数据的提问不算盲区**（如"我名下有哪些保单"），否则后台会堆满根本不需要补语料的个人数据查询。
 
