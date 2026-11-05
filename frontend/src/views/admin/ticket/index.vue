@@ -125,7 +125,8 @@ const exporting = ref(false);
 
 /**
  * 按当前筛选条件导出 Excel
- * <p>导出的是"看到什么就导出什么":条件与列表共用 query,不带分页</p>
+ * <p>导出的是"看到什么就导出什么":条件与列表同源。注意 query 是 useTable 返回的 Ref,
+ * 必须取 .value 展开成纯对象——直接把 Ref 传给请求层,内部依赖链会让参数无法 JSON 序列化。</p>
  */
 async function exportExcel(): Promise<void> {
   if (exporting.value) {
@@ -133,7 +134,11 @@ async function exportExcel(): Promise<void> {
   }
   exporting.value = true;
   try {
-    const blob = await exportTicketExcelApi(query as TicketQueryParams);
+    const blob = await exportTicketExcelApi({
+      ...query.value,
+      pageNum: pagination.pageNum,
+      pageSize: pagination.pageSize,
+    } as TicketQueryParams);
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
@@ -141,6 +146,8 @@ async function exportExcel(): Promise<void> {
     link.click();
     URL.revokeObjectURL(url);
     ElMessage.success('导出成功');
+  } catch {
+    // 失败提示已由请求拦截器统一给出,这里只保证按钮状态能复位
   } finally {
     exporting.value = false;
   }

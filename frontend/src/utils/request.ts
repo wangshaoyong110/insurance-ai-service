@@ -74,11 +74,24 @@ function hideLoading(): void {
 }
 
 /**
+ * 安全序列化:参数里混入 Ref / Proxy 等非纯数据对象时会形成循环引用
+ * <p>直接抛错会让一次普通请求被误判成"网络异常",这里降级为唯一标记——
+ * 拿不到稳定 key 时宁可不做去重,也不能让请求发不出去。</p>
+ */
+function safeStringify(value: unknown): string {
+  try {
+    return JSON.stringify(value ?? {});
+  } catch {
+    return `#unserializable-${Date.now()}-${Math.random()}`;
+  }
+}
+
+/**
  * 生成请求唯一标识:方法 + 地址 + 参数
  */
 function buildRequestKey(config: InternalAxiosRequestConfig): string {
   const { method, url, params, data } = config;
-  return [method, url, JSON.stringify(params ?? {}), JSON.stringify(data ?? {})].join('&');
+  return [method, url, safeStringify(params), safeStringify(data)].join('&');
 }
 
 /**
