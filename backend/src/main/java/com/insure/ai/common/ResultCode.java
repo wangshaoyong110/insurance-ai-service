@@ -84,7 +84,10 @@ public enum ResultCode {
     SMS_DAILY_LIMIT(4004, "今日验证码获取次数已达上限"),
     SMS_CODE_EMPTY(4005, "请输入短信验证码"),
     SMS_CODE_ERROR(4006, "短信验证码不正确"),
-    SMS_CODE_EXPIRED(4007, "短信验证码已失效,请重新获取");
+    SMS_CODE_EXPIRED(4007, "短信验证码已失效,请重新获取"),
+    SMS_SCENE_NOT_ALLOWED(4008, "短信场景不合法或暂未开放"),
+    SMS_RISK_REJECTED(4009, "请求过于频繁,请稍后再试"),
+    SMS_PHONE_REGISTERED(4010, "该手机号已注册,请直接登录");
 
     /** 状态码 */
     private final Integer code;

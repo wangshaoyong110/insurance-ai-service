@@ -87,6 +87,14 @@ insure:
     resend-interval: 60
     # 同一手机号每日发送上限
     daily-limit: 10
+    # 已开放的短信场景(登录/重置密码未实现前不要放开,否则可被用来换场景刷量)
+    supported-scenes:
+      - register
+    # 同一 IP 一小时 / 一自然日发送上限:防止换个手机号继续轰炸
+    ip-hourly-limit: 20
+    ip-daily-limit: 50
+    # 全站每自然日发送总量上限:保护短信预算,防止代理池分布式刷量
+    global-daily-limit: 1000
     # 单条验证码允许的校验失败次数
     max-verify-attempts: 5
     # 验证码位数
@@ -100,6 +108,10 @@ insure:
     # 访问前缀,与 WebMvcConfig 中资源映射保持一致
     url-prefix: /api/upload/
   security:
+    # 可信反向代理 IP:只有 TCP 对端在此列表中才采信 X-Forwarded-For。
+    # 默认空 = 一律不信任代理头,防止伪造 IP 绕过限流;
+    # 部署在 Nginx/网关后,把网关内网 IP(如 127.0.0.1、10.0.0.8)填进来。
+    trusted-proxies: []
     # 免认证白名单
     white-list:
       # 客户端(客户)免登录接口

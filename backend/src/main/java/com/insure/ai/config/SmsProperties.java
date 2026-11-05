@@ -4,6 +4,9 @@ import lombok.Data;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /**
  * 短信通道配置
  * <p>
@@ -34,6 +37,22 @@ public class SmsProperties {
 
     /** 同一手机号每日发送上限 */
     private int dailyLimit = 10;
+
+    /**
+     * 已开放的短信场景
+     * <p>只有注册流程已打通,登录 / 重置密码未实现前一律拒绝发送,
+     * 避免攻击者用任意场景参数刷短信。开放新场景时在此追加即可。</p>
+     */
+    private List<String> supportedScenes = new ArrayList<>(List.of("register"));
+
+    /** 同一 IP 一小时内发送上限(防止换手机号批量轰炸) */
+    private int ipHourlyLimit = 20;
+
+    /** 同一 IP 每自然日发送上限 */
+    private int ipDailyLimit = 50;
+
+    /** 全站每自然日发送总量上限(保护短信预算,防止分布式刷量) */
+    private int globalDailyLimit = 1000;
 
     /** 单条验证码允许的最大校验失败次数,超过即作废 */
     private int maxVerifyAttempts = 5;

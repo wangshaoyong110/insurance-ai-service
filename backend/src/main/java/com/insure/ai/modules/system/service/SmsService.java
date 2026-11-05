@@ -17,12 +17,15 @@ public interface SmsService {
 
     /**
      * 发送验证码
+     * <p>发送前依次校验:场景是否开放 → 手机号是否已注册 → 同 IP 小时/日上限 →
+     * 全站日总量 → 手机号日上限 → 60 秒重发间隔。任一不通过都不产生短信。</p>
      *
-     * @param phone 手机号
-     * @param scene 使用场景
+     * @param phone    手机号
+     * @param scene    使用场景
+     * @param clientIp 客户端 IP(由控制器按可信代理规则解析,服务层不直接信请求头)
      * @return 发送结果(演示环境含回显验证码)
      */
-    SmsCodeVO sendVerifyCode(String phone, SmsSceneEnum scene);
+    SmsCodeVO sendVerifyCode(String phone, SmsSceneEnum scene, String clientIp);
 
     /**
      * 校验验证码,失败抛业务异常

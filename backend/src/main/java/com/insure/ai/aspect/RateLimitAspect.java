@@ -4,7 +4,9 @@ import com.insure.ai.common.BusinessException;
 import com.insure.ai.common.Constants;
 import com.insure.ai.common.ResultCode;
 import com.insure.ai.common.annotation.RateLimit;
+import com.insure.ai.common.util.ClientIpUtils;
 import com.insure.ai.common.util.SecurityUtils;
+import com.insure.ai.config.SecurityProperties;
 import com.insure.ai.security.LoginUser;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
@@ -43,6 +45,7 @@ import java.util.concurrent.TimeUnit;
 public class RateLimitAspect {
 
     private final StringRedisTemplate stringRedisTemplate;
+    private final SecurityProperties securityProperties;
 
     @Around("@annotation(rateLimit)")
     public Object around(ProceedingJoinPoint point, RateLimit rateLimit) throws Throwable {
@@ -85,18 +88,19 @@ public class RateLimitAspect {
         return "ip" + clientIp();
     }
 
+    /**
+     * 取客户端 IP
+     * <p>不直接读 X-Forwarded-For:该头可被伪造,曾导致免认证接口的 IP 限流形同虚设。
+     * 统一走 {@link ClientIpUtils},只有可信代理才解析代理头。</p>
+     */
     private String clientIp() {
         ServletRequestAttributes attributes =
                 (ServletRequestAttributes) RequestContextHolder.getRequestAttributes();
         if (attributes == null) {
-            return "unknown";
+            return ClientIpUtils.UNKNOWN;
         }
         HttpServletRequest request = attributes.getRequest();
-        String forwarded = request.getHeader("X-Forwarded-For");
-        if (StringUtils.hasText(forwarded)) {
-            return forwarded.split(",")[0].trim();
-        }
-        return request.getRemoteAddr();
+        return ClientIpUtils.resolve(request, securityProperties.getTrustedProxies());
     }
 
     /**

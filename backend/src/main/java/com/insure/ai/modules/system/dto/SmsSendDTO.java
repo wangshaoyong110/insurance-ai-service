@@ -22,7 +22,8 @@ public class SmsSendDTO implements Serializable {
     @Pattern(regexp = "^1[3-9]\\d{9}$", message = "手机号格式不正确")
     private String phone;
 
-    /** 使用场景:register / login / reset */
+    /** 使用场景:register / login / reset,未开放的场景会被服务层拒绝 */
     @Schema(description = "使用场景:register 注册、login 登录、reset 重置密码", example = "register")
+    @Pattern(regexp = "^register$|^login$|^reset$", message = "短信场景不正确")
     private String scene = "register";
 }

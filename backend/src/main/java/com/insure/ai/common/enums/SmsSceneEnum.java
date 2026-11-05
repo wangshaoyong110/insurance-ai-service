@@ -2,6 +2,8 @@ package com.insure.ai.common.enums;
 
 import lombok.Getter;
 
+import java.util.Optional;
+
 /**
  * 短信验证码使用场景
  * <p>不同场景的验证码分开存储,避免注册验证码被拿去重置密码</p>
@@ -29,19 +31,22 @@ public enum SmsSceneEnum {
     }
 
     /**
-     * 按标识解析场景,未匹配时默认注册场景
+     * 严格解析场景标识,非法值返回空
+     * <p>不要静默回落到注册场景:否则攻击者可用任意 scene 变换 Redis key,
+     * 绕过「同一场景 60 秒重发」限制。空值仍按注册处理,兼容未传该字段的老客户端。</p>
      *
      * @param code 场景标识
-     * @return 场景枚举
+     * @return 解析结果
      */
-    public static SmsSceneEnum of(String code) {
-        if (code != null) {
-            for (SmsSceneEnum scene : values()) {
-                if (scene.code.equalsIgnoreCase(code)) {
-                    return scene;
-                }
+    public static Optional<SmsSceneEnum> parse(String code) {
+        if (code == null || code.isBlank()) {
+            return Optional.of(REGISTER);
+        }
+        for (SmsSceneEnum scene : values()) {
+            if (scene.code.equalsIgnoreCase(code.trim())) {
+                return Optional.of(scene);
             }
         }
-        return REGISTER;
+        return Optional.empty();
     }
 }

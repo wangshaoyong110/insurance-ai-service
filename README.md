@@ -118,7 +118,7 @@ insurance-ai-service/
 │       │   │   ├── chat/ kb/ policy/ service/ system/
 │       │   ├── application.yml
 │       │   └── logback-spring.xml                  # 按天滚动 + gz 压缩 + 异步 + traceId
-│       └── test/java/com/insure/ai/                # 38 个单元测试(国密/脱敏/JWT/越权/序列化)
+│       └── test/java/com/insure/ai/                # 55 个单元测试(国密/短信防刷/脱敏/JWT/越权/序列化)
 └── frontend/
     ├── Dockerfile                     # 构建 + Nginx 运行
     ├── index.html                     # 管理端入口
@@ -365,12 +365,27 @@ springdoc:
 
 ### 短信验证码（注册闭环）
 
-- 接口：`POST /auth/sms-code`，body `{ phone, scene }`，`scene` 取 `register` / `login` / `reset`。
-- 频控：同一手机号同一场景 60 秒内不可重发（返回 `4003` 并告知还需等待多少秒），单日上限 10 条（`4004`）。
+- 接口：`POST /auth/sms-code`，body `{ phone, scene }`。**当前仅开放 `register`**；`login` / `reset` 尚未实现，传入返回 `4008`，非法值在参数校验阶段即被拦。
+- 注册：`insure.sms.verify-register=true`（默认）时注册必须带 `smsCode`，校验通过才落库；本地联调可临时置 false。
 - 校验：验证码 5 分钟有效、一次性使用；单条验证码连续错 5 次即作废（`4007`），防止 6 位码被穷举。
 - 存储：`sms:code:{scene}:{phone}` 等 key 全部落 Redis，多实例部署共享状态，不依赖本地内存。
-- 注册：`insure.sms.verify-register=true`（默认）时注册必须带 `smsCode`，校验通过才落库；本地联调可临时置 false。
 - **运营商尚未接入**：`SmsServiceImpl#doSend` 只打日志并视为发送成功，方法注释里给了阿里云 / 腾讯云两段对接示例。`insure.sms.mock=true` 时验证码随响应回显（`debugCode`），演示环境无需真实短信；接入后把 `mock` 置 false，`debugCode` 自然为空。
+
+**防刷矩阵**（发送前依次拦截，任一不过就不生成验证码、不调用发送通道）：
+
+| 层级 | 维度 | 阈值 | 拦截返回 |
+| --- | --- | --- | --- |
+| 接口层 | 同一 IP | 5 次 / 60 秒 | `429` |
+| 风控层 | 场景白名单 | 仅 `register` | `4008` |
+| 风控层 | 已注册手机号 | 注册场景直接拒绝，避免骚扰存量用户 | `4010` |
+| 风控层 | 同一 IP | 20 次 / 小时、50 次 / 自然日 | `4009` |
+| 风控层 | 全站 | 1000 条 / 自然日（保护短信预算） | `4009` |
+| 风控层 | 同一手机号 | 10 条 / 自然日 | `4004` |
+| 风控层 | 同一手机号 + 同一场景 | 60 秒重发间隔 | `4003` |
+| 校验层 | 单条验证码 | 连续错 5 次即作废 | `4007` |
+
+- **IP 可信度**：`X-Forwarded-For` 可被客户端任意伪造，所以默认**一律不采信**，限流按 TCP 对端 IP 计；部署在 Nginx / 网关后，把网关内网 IP 填进 `insure.security.trusted-proxies`，才按「从右往左跳过可信代理」解析真实客户端。已实测伪造不同 XFF + 换手机号不会分裂限流 key。
+- **故障策略**：Redis 异常时短信风控 **fail-closed 拒绝发送**（短信是付费资源，宁可不发也不能无限发），与通用限流切面的「降级放行」策略刻意不同；注册接口另有 10 次 / 分钟的限流。
 
 ### 菜单驱动的动态路由
 
@@ -607,6 +622,8 @@ backend/logs/
 | AI 越权防护 | ✅ 用他人保单号提问被拒绝，不泄露存在性 |
 | 模型配置加密 | ✅ `ai_model_config.api_key` 为 `SM4:` 前缀密文，接口仅返回 `sk-****8527`；启动时自动把历史 AES 密文迁移为 SM4 |
 | 短信验证码 | ✅ 发送返回 6 位验证码；60 秒内重发返回 `4003`；错误验证码注册返回 `4006`；正确验证码注册成功 |
+| 短信防刷 | ✅ 未开放场景 `4008`、已注册手机号 `4010`、同 IP 小时上限 / 全站日总量 `4009`、注册接口第 11 次 `429` |
+| IP 防伪造 | ✅ 两次携带不同伪造 `X-Forwarded-For` 且换手机号,仍只生成 1 个 IP 计数 key 并在第 2 次命中 `4009` |
 | 国密 JWT | ✅ 登录 token 头为 `{"alg":"SM2-SM3"}`，签名 SM2、摘要 SM3；历史 HS256 token 仍可校验通过 |
 | 模型配置热生效 | ✅ 后台改 Key / 模型后下一次提问即生效，未重启 |
 | Swagger 分组 | ✅ `admin-api` 47 个接口 / `client-api` 16 个接口；登录接口无锁 |
@@ -619,7 +636,7 @@ backend/logs/
 | 敏感字段脱敏 | ✅ 库中存 `330102199001011234`，接口返回 `3301**********1234`；手机号 `139****0001` |
 | 消息分页 | ✅ `?pageNum=1&pageSize=4` 返回 `total` 与正序 `records` |
 | 健康检查 | ✅ `/api/actuator/health` 匿名返回 `{"status":"UP"}`；`/actuator/metrics` 匿名访问被拦截 |
-| 单元测试 | ✅ 38 个用例全绿（国密 SM2/SM3/SM4 / 脱敏 / JWT / 实体序列化 / 工具越权防护），JaCoCo 报告在 `backend/target/site/jacoco/` |
+| 单元测试 | ✅ 55 个用例全绿（国密 SM2/SM3/SM4 / 短信防刷 / IP 防伪造 / 脱敏 / JWT / 实体序列化 / 工具越权防护），JaCoCo 报告在 `backend/target/site/jacoco/` |
 
 ---
 
@@ -743,6 +760,7 @@ location / {
 - **`INSURE_JWT_SECRET` 生产必须更换**，默认值仅供本地开发；长度 ≥ 32 字节。
 - **国密算法落地**：数据传输与存储用国密套件——`SM4-GCM` 加密敏感字段（API Key）、`SM3` 做摘要与 `HMAC-SM3`、`SM2` 签名并签发 JWT（token 头 `alg=SM2-SM3`）。历史 HS256 token 在校验时自动兼容，过期即自然淘汰；账号密码仍用 Spring Security 自带 BCrypt，避免自研口令算法带来的风险。
 - **敏感字段出口脱敏**：证件号、手机号由序列化器强制打码，不依赖录入数据时人工处理。
+- **不要信任客户端的代理头**：`X-Forwarded-For` / `X-Real-IP` 默认被忽略，限流按 TCP 对端 IP；只有 `insure.security.trusted-proxies` 中登记的网关 IP 才会被解析，避免伪造 IP 绕过限流。
 - **对话接口已限流**：按登录用户计数，Redis 异常时降级放行（限流是保护措施，不该成为新故障点）。
 - **健康检查只放行 `/actuator/health`**：`metrics` 等端点仍需登录，不对外暴露 JVM 与连接池细节。
 - 生产/内网交付时关闭 Swagger（见「三、6」），避免暴露内部接口清单。
@@ -773,7 +791,7 @@ location / {
 bash scripts/ci.sh
 ```
 
-它依次检查：后端编译 → 38 个单元测试 → 前端类型检查 + 生产构建 → 硬编码密钥扫描。
+它依次检查：后端编译 → 55 个单元测试 → 前端类型检查 + 生产构建 → 硬编码密钥扫描。
 
 另外请注意：
 

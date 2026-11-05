@@ -66,18 +66,32 @@
 | 方法 | 路径 | 说明 | 参数 |
 | --- | --- | --- | --- |
 | POST | `/auth/login` | 客户登录 | body: `{ account, password }`，`account` 为手机号或账号 |
-| POST | `/auth/sms-code` | 获取短信验证码 | body: `{ phone, scene }`，`scene` 取 `register`/`login`/`reset`；60 秒内重发返回 `4003` |
+| POST | `/auth/sms-code` | 获取短信验证码 | body: `{ phone, scene }`，**当前仅开放 `register`**；60 秒内重发返回 `4003` |
 | POST | `/auth/register` | 客户注册（手机号唯一） | body: `{ phone, password, confirmPassword, smsCode, nickname?, realName?, email? }` |
 | POST | `/auth/logout` | 退出登录 | header: token |
 | GET | `/auth/me` | 当前客户信息 | - |
 | PUT | `/auth/password` | 修改密码 | body: `{ oldPassword, newPassword, confirmPassword }` |
 | PUT | `/auth/profile` | 修改资料 | query: `nickname?`, `email?` |
 
+**`/auth/sms-code` 防刷规则**（发送前依次校验，任一不过都不生成验证码、不调用发送通道）：
+
+| 维度 | 阈值 | 返回码 |
+| --- | --- | --- |
+| 接口层同 IP | 5 次 / 60 秒 | `429` |
+| 场景白名单 | 仅 `register`；非法值参数校验拦截，`login`/`reset` 返回 `4008` | `4008` |
+| 已注册手机号 | 注册场景直接拒绝 | `4010` |
+| 同 IP | 20 次 / 小时、50 次 / 自然日 | `4009` |
+| 全站 | 1000 条 / 自然日 | `4009` |
+| 同手机号 | 10 条 / 自然日 | `4004` |
+| 同手机号 + 同场景 | 60 秒重发间隔 | `4003` |
+
+> IP 取自 TCP 对端，**默认忽略客户端伪造的 `X-Forwarded-For`**；仅当 `insure.security.trusted-proxies` 登记了网关 IP 时才解析代理头。Redis 异常时该接口按 fail-closed 拒绝发送（`4009`）。`/auth/register` 另有 10 次 / 分钟限流。
+
 登录响应 `data`：
 
 ```json
 {
-  "token": "eyJhbGciOiJIUzM4NCJ9...",
+  "token": "eyJhbGciOiJTTTItU00zIiwidHlwIjoiSldUIn0...",
   "tokenPrefix": "Bearer",
   "expiresIn": 604800,
   "userInfo": {

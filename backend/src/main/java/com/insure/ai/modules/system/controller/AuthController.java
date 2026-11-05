@@ -1,9 +1,14 @@
 package com.insure.ai.modules.system.controller;
 
 import com.insure.ai.aspect.Log;
-import com.insure.ai.common.annotation.RateLimit;
+import com.insure.ai.common.BusinessException;
 import com.insure.ai.common.Result;
+import com.insure.ai.common.ResultCode;
+import com.insure.ai.common.annotation.RateLimit;
+import com.insure.ai.common.enums.SmsSceneEnum;
+import com.insure.ai.common.util.ClientIpUtils;
 import com.insure.ai.common.util.SecurityUtils;
+import com.insure.ai.config.SecurityProperties;
 import com.insure.ai.modules.system.dto.ChangePasswordDTO;
 import com.insure.ai.modules.system.dto.CusUserVO;
 import com.insure.ai.modules.system.dto.LoginDTO;
@@ -13,7 +18,6 @@ import com.insure.ai.modules.system.dto.SmsCodeVO;
 import com.insure.ai.modules.system.dto.SmsSendDTO;
 import com.insure.ai.modules.system.service.CusAuthService;
 import com.insure.ai.modules.system.service.SmsService;
-import com.insure.ai.common.enums.SmsSceneEnum;
 import com.insure.ai.security.JwtUtils;
 import io.swagger.v3.oas.annotations.security.SecurityRequirements;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -43,6 +47,7 @@ public class AuthController {
     private final CusAuthService cusAuthService;
     private final SmsService smsService;
     private final JwtUtils jwtUtils;
+    private final SecurityProperties securityProperties;
 
     /**
      * 客户登录(手机号或账号 + 密码)
@@ -56,20 +61,27 @@ public class AuthController {
 
     /**
      * 获取短信验证码
-     * <p>注册前必须先获取;验证码 5 分钟有效,同一手机号 60 秒内不可重复获取</p>
+     * <p>注册前必须先获取;验证码 5 分钟有效,同一手机号 60 秒内不可重复获取。
+     * 防刷由三道组成:本接口的 IP 限流注解 → 服务层的场景白名单/已注册手机号/
+     * 同 IP 与全站发送量上限 → 手机号重发间隔与日上限。</p>
      */
     @Log(module = "客户端-认证", operation = "获取短信验证码")
     @RateLimit(limit = 5, seconds = 60, message = "获取验证码过于频繁,请稍后再试")
     @SecurityRequirements
     @PostMapping("/sms-code")
-    public Result<SmsCodeVO> sendSmsCode(@Valid @RequestBody SmsSendDTO dto) {
-        return Result.success("验证码已发送", smsService.sendVerifyCode(dto.getPhone(), SmsSceneEnum.of(dto.getScene())));
+    public Result<SmsCodeVO> sendSmsCode(@Valid @RequestBody SmsSendDTO dto, HttpServletRequest request) {
+        // 严格解析场景:非法值直接拒绝,不再静默回落到注册场景
+        SmsSceneEnum scene = SmsSceneEnum.parse(dto.getScene())
+                .orElseThrow(() -> new BusinessException(ResultCode.SMS_SCENE_NOT_ALLOWED));
+        String clientIp = ClientIpUtils.resolve(request, securityProperties.getTrustedProxies());
+        return Result.success("验证码已发送", smsService.sendVerifyCode(dto.getPhone(), scene, clientIp));
     }
 
     /**
      * 客户注册
      */
     @Log(module = "客户端-认证", operation = "客户注册")
+    @RateLimit(limit = 10, seconds = 60, message = "注册尝试过于频繁,请稍后再试")
     @SecurityRequirements
     @PostMapping("/register")
     public Result<Long> register(@Valid @RequestBody RegisterDTO dto) {
