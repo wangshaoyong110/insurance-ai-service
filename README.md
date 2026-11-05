@@ -9,14 +9,14 @@
 | 平台 | 地址 | 说明 |
 | --- | --- | --- |
 | **Gitee**（主仓库） | https://gitee.com/wang_shao_yong/insurance-ai-service | 国内访问快，Issue / PR 优先在这里 |
-| **GitHub**（镜像） | https://github.com/Wangshaoyong/insurance-ai-service | 海外访问，与 Gitee 自动保持同步 |
+| **GitHub**（镜像） | https://github.com/wangshaoyong110/insurance-ai-service | 海外访问，与 Gitee 自动保持同步 |
 
 两个仓库的默认分支均为 **`master`**，代码完全一致（`main` 为历史分支，同样保持同步）。克隆任选其一：
 
 ```bash
 git clone https://gitee.com/wang_shao_yong/insurance-ai-service.git
 # 或
-git clone https://github.com/Wangshaoyong/insurance-ai-service.git
+git clone https://github.com/wangshaoyong110/insurance-ai-service.git
 ```
 
 ## 在线演示
