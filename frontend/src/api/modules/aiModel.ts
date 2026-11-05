@@ -4,7 +4,7 @@ import type { AiModelItem, AiModelTestResult } from '@/types';
 
 /**
  * 后台大模型配置接口
- * API Key 由后端 AES-256-GCM 加密入库,列表只返回掩码
+ * API Key 由后端国密 SM4-GCM 加密入库,列表只返回掩码
  */
 
 /** 配置列表 */

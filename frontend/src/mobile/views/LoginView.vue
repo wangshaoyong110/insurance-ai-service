@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { reactive, ref } from 'vue';
+import { onBeforeUnmount, reactive, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { cusRegisterApi } from '@/api';
+import { cusRegisterApi, cusSendSmsCodeApi } from '@/api';
 import { useCusUserStore } from '@/mobile/stores/cusUser';
 
 /**
@@ -26,6 +26,59 @@ const registerForm = reactive({
   nickname: '',
   password: '',
   confirmPassword: '',
+  smsCode: '',
+});
+
+/** 验证码倒计时剩余秒数 */
+const smsCountdown = ref(0);
+/** 验证码发送中 */
+const smsSending = ref(false);
+let smsTimer: ReturnType<typeof setInterval> | undefined;
+
+/**
+ * 获取短信验证码
+ * <p>60 秒倒计时内不可重复获取;演示环境验证码会直接回显在提示中</p>
+ */
+async function handleSendSmsCode(): Promise<void> {
+  if (smsCountdown.value > 0 || smsSending.value) {
+    return;
+  }
+  if (!/^1[3-9]\d{9}$/.test(registerForm.phone)) {
+    ElMessage.warning('请先输入正确的手机号');
+    return;
+  }
+  smsSending.value = true;
+  try {
+    const result = await cusSendSmsCodeApi({ phone: registerForm.phone, scene: 'register' });
+    smsCountdown.value = result.resendSeconds || 60;
+    smsTimer = setInterval(() => {
+      smsCountdown.value -= 1;
+      if (smsCountdown.value <= 0) {
+        smsCountdown.value = 0;
+        if (smsTimer) {
+          clearInterval(smsTimer);
+          smsTimer = undefined;
+        }
+      }
+    }, 1000);
+    // 演示环境后端会回显验证码,直接帮用户填好;接入真实运营商后 debugCode 恒为空
+    if (result.debugCode) {
+      registerForm.smsCode = result.debugCode;
+      ElMessage.success(`验证码已发送(演示环境自动填充):${result.debugCode}`);
+    } else {
+      ElMessage.success(result.tip || '验证码已发送,请注意查收短信');
+    }
+  } catch {
+    // 错误提示已由请求拦截器统一处理
+  } finally {
+    smsSending.value = false;
+  }
+}
+
+onBeforeUnmount(() => {
+  if (smsTimer) {
+    clearInterval(smsTimer);
+  }
 });
 
 /**
@@ -69,6 +122,10 @@ async function handleRegister(): Promise<void> {
     ElMessage.warning('两次输入的密码不一致');
     return;
   }
+  if (!/^\d{6}$/.test(registerForm.smsCode)) {
+    ElMessage.warning('请输入 6 位短信验证码');
+    return;
+  }
   if (!agreed.value) {
     ElMessage.warning('请先阅读并同意隐私说明');
     return;
@@ -80,6 +137,7 @@ async function handleRegister(): Promise<void> {
       password: registerForm.password,
       confirmPassword: registerForm.confirmPassword,
       nickname: registerForm.nickname || undefined,
+      smsCode: registerForm.smsCode,
     });
     ElMessage.success('注册成功,请登录');
     loginForm.account = registerForm.phone;
@@ -165,6 +223,24 @@ function switchTab(tab: 'login' | 'register'): void {
         <label class="field">
           <el-icon><Iphone /></el-icon>
           <input v-model="registerForm.phone" type="tel" maxlength="11" placeholder="手机号(用于登录)" />
+        </label>
+        <label class="field field--sms">
+          <el-icon><ChatDotRound /></el-icon>
+          <input
+            v-model="registerForm.smsCode"
+            type="text"
+            inputmode="numeric"
+            maxlength="6"
+            placeholder="短信验证码"
+          />
+          <button
+            type="button"
+            class="sms-btn"
+            :disabled="smsCountdown > 0 || smsSending"
+            @click="handleSendSmsCode"
+          >
+            {{ smsCountdown > 0 ? `${smsCountdown}s 后重发` : smsSending ? '发送中...' : '获取验证码' }}
+          </button>
         </label>
         <label class="field">
           <el-icon><Avatar /></el-icon>
@@ -338,6 +414,28 @@ function switchTab(tab: 'login' | 'register'): void {
     &::placeholder {
       color: #b3bccb;
     }
+  }
+
+  &--sms {
+    padding-right: 8px;
+  }
+}
+
+.sms-btn {
+  flex-shrink: 0;
+  padding: 7px 12px;
+  font-size: 12px;
+  color: $color-primary;
+  background: rgba(27, 95, 170, 0.08);
+  border: none;
+  border-radius: 8px;
+  white-space: nowrap;
+  cursor: pointer;
+
+  &:disabled {
+    color: #98a2b3;
+    background: #eef1f6;
+    cursor: not-allowed;
   }
 }
 

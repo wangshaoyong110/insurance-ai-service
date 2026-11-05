@@ -1,5 +1,12 @@
 import { cusGet, cusPost, cusPut } from '@/utils/cusRequest';
-import type { ChangePasswordParams, CusLoginResult, LoginParams, RegisterParams } from '@/types/api';
+import type {
+  ChangePasswordParams,
+  CusLoginResult,
+  LoginParams,
+  RegisterParams,
+  SmsCodeResult,
+  SmsSendParams,
+} from '@/types/api';
 import type { CusUserInfo } from '@/types';
 
 /**
@@ -15,6 +22,11 @@ export function cusLoginApi(data: LoginParams): Promise<CusLoginResult> {
 /** 客户注册 */
 export function cusRegisterApi(data: RegisterParams): Promise<number> {
   return cusPost<number>('/auth/register', data);
+}
+
+/** 获取短信验证码(注册等场景) */
+export function cusSendSmsCodeApi(data: SmsSendParams): Promise<SmsCodeResult> {
+  return cusPost<SmsCodeResult>('/auth/sms-code', data);
 }
 
 /** 客户退出登录 */

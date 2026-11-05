@@ -50,6 +50,26 @@ export interface RegisterParams {
   realName?: string;
   phone: string;
   email?: string;
+  /** 短信验证码(注册场景) */
+  smsCode?: string;
+}
+
+/** 短信验证码发送参数 */
+export interface SmsSendParams {
+  phone: string;
+  /** 使用场景:register / login / reset */
+  scene: string;
+}
+
+/** 短信验证码发送结果 */
+export interface SmsCodeResult {
+  phone: string;
+  scene: string;
+  expireSeconds: number;
+  resendSeconds: number;
+  /** 演示环境回显的验证码,接入真实通道后恒为空 */
+  debugCode?: string;
+  tip: string;
 }
 
 /** 修改密码参数 */

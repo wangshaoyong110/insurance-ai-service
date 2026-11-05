@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  菜单 Mapper
+  说明:手工 SQL 一律写在 XML,Java 接口只保留方法声明。
+-->
+<mapper namespace="com.insure.ai.modules.system.mapper.SysMenuMapper">
+
+    <!-- 查询某个角色已授权的菜单ID集合 -->
+    <select id="selectMenuIdsByRoleId" resultType="java.lang.Long">
+        SELECT rm.menu_id
+        FROM sys_role_menu rm
+        WHERE rm.role_id = #{roleId}
+          AND rm.deleted = 0
+    </select>
+
+</mapper>

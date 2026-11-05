@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  会话 Mapper
+  说明:手工 SQL 一律写在 XML,Java 接口只保留方法声明,便于 DBA 审阅与索引优化。
+-->
+<mapper namespace="com.insure.ai.modules.chat.mapper.ChatSessionMapper">
+
+    <!-- 统计每个客户的历史会话数量(客户列表页使用) -->
+    <select id="countGroupByCusUser" resultType="java.util.Map">
+        SELECT cus_user_id AS cusUserId, COUNT(*) AS sessionCount
+        FROM chat_session
+        WHERE deleted = 0
+        GROUP BY cus_user_id
+    </select>
+
+</mapper>

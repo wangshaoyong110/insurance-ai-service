@@ -42,6 +42,10 @@ public class RegisterDTO implements Serializable {
     @Pattern(regexp = "^1[3-9]\\d{9}$", message = "手机号格式不正确")
     private String phone;
 
+    /** 短信验证码(insure.sms.verify-register=true 时必填) */
+    @Size(max = 10, message = "验证码格式不正确")
+    private String smsCode;
+
     /** 电子邮箱 */
     @Email(message = "邮箱格式不正确")
     private String email;

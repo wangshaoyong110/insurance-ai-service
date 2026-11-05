@@ -37,7 +37,7 @@
 
 两套体系 **数据隔离、接口隔离、登录页隔离、Token 隔离**，可在同一浏览器同时登录互不影响。
 
-技术栈：**Vue 3 + TypeScript(strict) + Vite + Element Plus + Pinia** ｜ **Spring Boot 3.4.8 + Java 17 + MyBatis-Plus 3.5.9 + MySQL 8 + Redis + Spring Security + JWT + Spring AI 1.0.1 / Spring AI Alibaba 1.0.0.4 + springdoc-openapi 2.8.17**。
+技术栈：**Vue 3 + TypeScript(strict) + Vite + Element Plus + Pinia** ｜ **Spring Boot 3.4.8 + Java 17 + MyBatis-Plus 3.5.9 + MySQL 8 + Redis + Spring Security + 国密（SM2/SM3/SM4）JWT + Spring AI 1.0.1 / Spring AI Alibaba 1.0.0.4 + springdoc-openapi 2.8.17**。
 
 > AI 层不写死厂商：模型名称、接口地址、API Key、温度都从数据库读取，后台页面即可切换 DeepSeek / 通义千问 / 内网 vLLM / Ollama / 行内模型网关，改完立即生效、无需重启。详见「六、AI 能力」。
 
@@ -88,14 +88,15 @@ insurance-ai-service/
 │       │   │   ├── annotation/RateLimit.java      # 接口限流注解
 │       │   │   ├── filter/TraceIdFilter.java      # 链路追踪 traceId
 │       │   │   ├── serializer/                    # 证件号 / 手机号脱敏序列化器
-│       │   │   ├── util/AesCryptoUtil.java        # AES-256-GCM(API Key 加密)
+│       │   │   ├── crypto/                        # 国密:Sm2Utils / Sm3Utils / Sm4Cipher
+│       │   │   │                                  # + SensitiveDataCipher(统一敏感字段加解密)
 │       │   │   ├── util/DesensitizeUtil.java      # 展示层脱敏
 │       │   │   └── enums/                          # UserType / MenuType / ChatRole / AiProvider / Policy...
 │       │   ├── config/                             # Security / MyBatis-Plus / Redis / Async / AdminInitializer
 │       │   │                                       # + CryptoConfig(主密钥) / AiModelInitializer / OpenApiConfig
 │       │   ├── security/                           # JwtUtils / JwtAuthenticationFilter / LoginAttemptService
 │       │   ├── aspect/                             # 操作日志、危险参数拦截、限流切面
-│       │   └── modules/
+│       │   └── modules/                            # 统一分层:controller → service(接口) → service/impl
 │       │       ├── system/
 │       │       │   ├── service/AdminAuthService    # 管理端登录(校验角色状态)
 │       │       │   ├── service/CusAuthService      # 客户端登录/注册
@@ -110,11 +111,14 @@ insurance-ai-service/
 │       │       │   └── tool/InsuranceQueryTools    # @Tool 查自己名下保单/理赔(强制登录态过滤)
 │       │       ├── policy/                         # 保单 InsPolicy / 理赔 InsClaim / 进度 InsClaimProgress
 │       │       ├── chat/                           # 会话、消息、同步 + SSE 流式对话
-│       │       └── kb/                             # 保险知识库
+│       │       ├── kb/                             # 保险知识库 + 知识盲区
+│       │       └── service/                        # 人工工单 + 回答评价
 │       ├── main/resources/
+│       │   ├── mapper/                             # 手工 SQL 全部在此,按模块分子目录
+│       │   │   ├── chat/ kb/ policy/ service/ system/
 │       │   ├── application.yml
 │       │   └── logback-spring.xml                  # 按天滚动 + gz 压缩 + 异步 + traceId
-│       └── test/java/com/insure/ai/                # 30 个单元测试(脱敏/AES/JWT/越权/序列化)
+│       └── test/java/com/insure/ai/                # 38 个单元测试(国密/脱敏/JWT/越权/序列化)
 └── frontend/
     ├── Dockerfile                     # 构建 + Nginx 运行
     ├── index.html                     # 管理端入口
@@ -136,6 +140,15 @@ insurance-ai-service/
             ├── admin/(dashboard|customer|user|menu|role|kb|log|model|policy)
             └── error/404.vue
 ```
+
+### 代码分层与 SQL 约定
+
+| 约定 | 落地方式 |
+| --- | --- |
+| 三层调用 | `controller` → `service`（接口）→ `service/impl`（实现），控制器只依赖接口，`@Transactional` 只写在实现类上 |
+| 手工 SQL | 一律写在 `src/main/resources/mapper/<模块>/*.xml`，Mapper 接口只留方法声明，便于 DBA 审阅与索引优化 |
+| 加解密 | 敏感字段（API Key 等）统一走 `SensitiveDataCipher`，算法为国密 SM4-GCM；账号密码则用框架自带 BCrypt，不重复造轮子 |
+| 参数绑定 | XML 中使用的多参数方法必须标注 `@Param`，避免编译期丢参数名导致运行期 `BindingException` |
 
 ---
 
@@ -166,7 +179,7 @@ mysql -uroot -p --default-character-set=utf8mb4 insurance_ai < sql/v3_service_cl
 | `kb_question` | 保险知识库语料 |
 | `chat_session` | 会话（关联 `cus_user_id`） |
 | `chat_message` | 消息（关联 `cus_user_id`） |
-| `ai_model_config` | **大模型配置**（`api_key` 存 AES-256-GCM 密文，`api_key_mask` 存展示掩码） |
+| `ai_model_config` | **大模型配置**（`api_key` 存国密 SM4-GCM 密文，`api_key_mask` 存展示掩码） |
 | `ins_policy` | **保单**（客户、险种、保额、保费、保障期间、状态） |
 | `ins_claim` | **理赔案件**（关联保单、申请/核定金额、状态、当前环节） |
 | `ins_claim_progress` | **理赔进度节点**（时间轴，供 AI 回答“理赔到哪一步”） |
@@ -274,7 +287,7 @@ npm run preview      # 本地预览 http://localhost:4173
 **按双用户体系分成两个分组**，页面右上角「Select a definition」切换：
 
 - `管理端接口`：`/admin/**`，47 个接口 / 10 个分组（登录认证、客户、管理员、角色、菜单、知识库、日志、概览、模型配置、保单理赔）
-- `客户端(手机 H5)接口`：`/auth/**`、`/chat/**`、`/file/**`，15 个接口 / 3 个分组
+- `客户端(手机 H5)接口`：`/auth/**`、`/chat/**`、`/file/**`，16 个接口 / 3 个分组
 
 **调试受保护接口**：
 
@@ -334,7 +347,7 @@ springdoc:
 - **回答评价（有用 / 没用）**：每条 AI 回复下方可评价，选“没用”时给原因标签（信息有误 / 答非所问 / 不够完整 / 响应太慢 / 其他），同一消息重复评价做覆盖更新。这是“AI 答得好不好”的唯一真实信号，后台据此算好评率。
 - **一键转人工**：底部「转人工客服」提交工单（带上本轮问题与业务分类），提交后可在「我的工单」看坐席接单与回复；同一个客户 10 分钟内最多提交 5 张，避免刷单占用坐席人力。
 - **我的**：资料编辑、修改密码、我的工单、隐私说明、关于、退出登录。
-- **登录 / 注册**：手机号登录，同一手机号仅可注册一次，注册需勾选隐私说明。
+- **登录 / 注册**：手机号登录，同一手机号仅可注册一次；注册需先获取 **短信验证码**（60 秒倒计时可重发、5 分钟有效），并勾选隐私说明。
 
 ### 管理端（PC · `index.html`）
 
@@ -349,6 +362,15 @@ springdoc:
 - **系统管理 → 菜单管理**：树表维护目录/菜单/按钮，配置路由地址、组件路径、图标、权限标识；**新增菜单后重新登录即可看到新菜单与新页面**。
 - **系统管理 → 模型配置**：见「六、AI 能力」。
 - **日志中心**：登录日志（区分管理端/客户端登录）、操作日志（参数脱敏、耗时、异常）。
+
+### 短信验证码（注册闭环）
+
+- 接口：`POST /auth/sms-code`，body `{ phone, scene }`，`scene` 取 `register` / `login` / `reset`。
+- 频控：同一手机号同一场景 60 秒内不可重发（返回 `4003` 并告知还需等待多少秒），单日上限 10 条（`4004`）。
+- 校验：验证码 5 分钟有效、一次性使用；单条验证码连续错 5 次即作废（`4007`），防止 6 位码被穷举。
+- 存储：`sms:code:{scene}:{phone}` 等 key 全部落 Redis，多实例部署共享状态，不依赖本地内存。
+- 注册：`insure.sms.verify-register=true`（默认）时注册必须带 `smsCode`，校验通过才落库；本地联调可临时置 false。
+- **运营商尚未接入**：`SmsServiceImpl#doSend` 只打日志并视为发送成功，方法注释里给了阿里云 / 腾讯云两段对接示例。`insure.sms.mock=true` 时验证码随响应回显（`debugCode`），演示环境无需真实短信；接入后把 `mock` 置 false，`debugCode` 自然为空。
 
 ### 菜单驱动的动态路由
 
@@ -390,10 +412,11 @@ springdoc:
 
 **密钥处理链路**：
 
-1. 前端提交明文 Key → `AiModelConfigService` 调 `AesCryptoUtil`（**AES-256-GCM**，随机 IV，密文含 IV 与 GCM Tag）；
+1. 前端提交明文 Key → `AiModelConfigService` 调 `SensitiveDataCipher`（**国密 SM4-GCM**，密钥由 PBKDF2-HMAC-SM3 派生，随机 IV，密文带 `SM4:` 前缀）；
 2. 库中 `api_key` 存密文，`api_key_mask` 存掩码（如 `sk-****cdef`），**列表接口只返回掩码，明文永不出库**；
 3. 编辑时不改 Key 则沿用旧密文（前端传空即视为不修改）；
-4. 主密钥来自 `insure.crypto.secret` / 环境变量 `INSURE_CRYPTO_SECRET`，未配置时退化为内置默认值并打印安全告警——**生产必须显式配置，且配置后不可变更**（变更后旧密文无法解密）。
+4. 主密钥来自 `insure.crypto.secret` / 环境变量 `INSURE_CRYPTO_SECRET`，未配置时退化为内置默认值并打印安全告警——**生产必须显式配置，且配置后不可变更**（变更后旧密文无法解密）；
+5. 历史 AES 密文由 `CryptoMigrationRunner` 在启动时自动识别、解密并重新用 SM4 加密覆盖，存量数据无感迁移；无法解密的历史数据只告警不覆盖，需在后台重新录入。
 
 **立即生效**：`AiModelFactory` 按「启用 + 默认」从库中取配置构建 `ChatModel`（`DashScopeChatModel` 或 `OpenAiChatModel`），带本地缓存，配置增删改时失效重建。**改完下一次提问即用新配置，无需重启服务**。
 
@@ -582,9 +605,11 @@ backend/logs/
 | 带 query 的子路由直开（`/service/policy?tab=claim`） | ✅ 正确落在理赔页签（守卫重解析时会保留 `query` / `hash`） |
 | AI 工具调用（查保单 / 查理赔） | ✅ 返回库中真实数据，与后台列表一致 |
 | AI 越权防护 | ✅ 用他人保单号提问被拒绝，不泄露存在性 |
-| 模型配置加密 | ✅ `ai_model_config.api_key` 为密文，接口仅返回 `sk-****cdef` |
+| 模型配置加密 | ✅ `ai_model_config.api_key` 为 `SM4:` 前缀密文，接口仅返回 `sk-****8527`；启动时自动把历史 AES 密文迁移为 SM4 |
+| 短信验证码 | ✅ 发送返回 6 位验证码；60 秒内重发返回 `4003`；错误验证码注册返回 `4006`；正确验证码注册成功 |
+| 国密 JWT | ✅ 登录 token 头为 `{"alg":"SM2-SM3"}`，签名 SM2、摘要 SM3；历史 HS256 token 仍可校验通过 |
 | 模型配置热生效 | ✅ 后台改 Key / 模型后下一次提问即生效，未重启 |
-| Swagger 分组 | ✅ `admin-api` 47 个接口 / `client-api` 15 个接口；登录接口无锁 |
+| Swagger 分组 | ✅ `admin-api` 47 个接口 / `client-api` 16 个接口；登录接口无锁 |
 | 前端类型检查 / 构建 | ✅ `vue-tsc --noEmit` 零报错，`vite build` 产出 `index.html` + `mobile.html` |
 | 双端页面渲染 | ✅ 手机端 390×844 无横向溢出；管理端各页面正常 |
 | 后台表格布局 | ✅ 保单/理赔/模型页列宽实测填满容器（1116px），无固定列遮挡、无日期或金额折行 |
@@ -594,7 +619,7 @@ backend/logs/
 | 敏感字段脱敏 | ✅ 库中存 `330102199001011234`，接口返回 `3301**********1234`；手机号 `139****0001` |
 | 消息分页 | ✅ `?pageNum=1&pageSize=4` 返回 `total` 与正序 `records` |
 | 健康检查 | ✅ `/api/actuator/health` 匿名返回 `{"status":"UP"}`；`/actuator/metrics` 匿名访问被拦截 |
-| 单元测试 | ✅ 30 个用例全绿（脱敏 / AES / JWT / 实体序列化 / 工具越权防护），JaCoCo 报告在 `backend/target/site/jacoco/` |
+| 单元测试 | ✅ 38 个用例全绿（国密 SM2/SM3/SM4 / 脱敏 / JWT / 实体序列化 / 工具越权防护），JaCoCo 报告在 `backend/target/site/jacoco/` |
 
 ---
 
@@ -716,6 +741,7 @@ location / {
 - **仓库内不含任何真实密钥**：`application.yml` 里全部是 `${ENV:默认值}` 占位，真实值靠环境变量或 `application-local.yml`（已 gitignore）注入。
 - **`INSURE_CRYPTO_SECRET` 是 API Key 加密主密钥**，未配置时会退化为内置默认值并打印告警，等于没加密。**配置后不可变更**，变更会导致库中已有密文无法解密，需逐条重录。
 - **`INSURE_JWT_SECRET` 生产必须更换**，默认值仅供本地开发；长度 ≥ 32 字节。
+- **国密算法落地**：数据传输与存储用国密套件——`SM4-GCM` 加密敏感字段（API Key）、`SM3` 做摘要与 `HMAC-SM3`、`SM2` 签名并签发 JWT（token 头 `alg=SM2-SM3`）。历史 HS256 token 在校验时自动兼容，过期即自然淘汰；账号密码仍用 Spring Security 自带 BCrypt，避免自研口令算法带来的风险。
 - **敏感字段出口脱敏**：证件号、手机号由序列化器强制打码，不依赖录入数据时人工处理。
 - **对话接口已限流**：按登录用户计数，Redis 异常时降级放行（限流是保护措施，不该成为新故障点）。
 - **健康检查只放行 `/actuator/health`**：`metrics` 等端点仍需登录，不对外暴露 JVM 与连接池细节。
@@ -747,7 +773,7 @@ location / {
 bash scripts/ci.sh
 ```
 
-它依次检查：后端编译 → 30 个单元测试 → 前端类型检查 + 生产构建 → 硬编码密钥扫描。
+它依次检查：后端编译 → 38 个单元测试 → 前端类型检查 + 生产构建 → 硬编码密钥扫描。
 
 另外请注意：
 

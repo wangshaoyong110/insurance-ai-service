@@ -4,7 +4,6 @@ import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.insure.ai.modules.policy.entity.InsClaim;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
-import org.apache.ibatis.annotations.Select;
 
 import java.util.List;
 import java.util.Map;
@@ -27,15 +26,5 @@ public interface InsClaimMapper extends BaseMapper<InsClaim> {
      * @param policyIds 当前页保单ID
      * @return key: policyId, value: claimCount
      */
-    @Select("""
-            <script>
-            SELECT policy_id AS policyId, COUNT(*) AS claimCount
-            FROM ins_claim
-            WHERE deleted = 0
-              AND policy_id IN
-              <foreach collection="policyIds" item="id" open="(" separator="," close=")">#{id}</foreach>
-            GROUP BY policy_id
-            </script>
-            """)
     List<Map<String, Object>> countByPolicyIds(@Param("policyIds") List<Long> policyIds);
 }

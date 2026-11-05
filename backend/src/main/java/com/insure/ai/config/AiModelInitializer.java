@@ -2,7 +2,7 @@ package com.insure.ai.config;
 
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.insure.ai.common.enums.AiProviderEnum;
-import com.insure.ai.common.util.AesCryptoUtil;
+import com.insure.ai.common.crypto.SensitiveDataCipher;
 import com.insure.ai.modules.ai.entity.AiModelConfig;
 import com.insure.ai.modules.ai.mapper.AiModelConfigMapper;
 import lombok.RequiredArgsConstructor;
@@ -13,7 +13,6 @@ import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
-import javax.crypto.SecretKey;
 import java.math.BigDecimal;
 
 /**
@@ -34,7 +33,7 @@ public class AiModelInitializer implements ApplicationRunner {
 
     private final AiModelConfigMapper aiModelConfigMapper;
     private final DeepSeekProperties deepSeekProperties;
-    private final SecretKey cryptoSecretKey;
+    private final SensitiveDataCipher sensitiveDataCipher;
 
     @Override
     public void run(ApplicationArguments args) {
@@ -51,8 +50,8 @@ public class AiModelInitializer implements ApplicationRunner {
         config.setProvider(AiProviderEnum.OPENAI_COMPATIBLE.getCode());
         config.setBaseUrl(StringUtils.hasText(deepSeekProperties.getBaseUrl())
                 ? deepSeekProperties.getBaseUrl() : "https://api.deepseek.com");
-        config.setApiKeyCipher(AesCryptoUtil.encrypt(deepSeekProperties.getApiKey(), cryptoSecretKey));
-        config.setApiKeyMask(AesCryptoUtil.mask(deepSeekProperties.getApiKey()));
+        config.setApiKeyCipher(sensitiveDataCipher.encrypt(deepSeekProperties.getApiKey()));
+        config.setApiKeyMask(sensitiveDataCipher.mask(deepSeekProperties.getApiKey()));
         config.setModel(deepSeekProperties.getModel());
         config.setTemperature(deepSeekProperties.getTemperature() == null
                 ? new BigDecimal("0.30") : BigDecimal.valueOf(deepSeekProperties.getTemperature()));

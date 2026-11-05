@@ -70,9 +70,30 @@ insure:
     header: Authorization
     prefix: "Bearer "
   crypto:
-    # API Key 加密主密钥(AES-256-GCM),生产必须通过环境变量 INSURE_CRYPTO_SECRET 注入
-    # 未配置时使用内置默认值并打印安全告警;配置后不可变更,否则已入库的密文无法解密
+    # API Key 加密主密钥(国密 SM4-GCM,密钥由 PBKDF2-HMAC-SM3 派生)
+    # 生产必须通过环境变量 INSURE_CRYPTO_SECRET 注入;未配置时使用内置默认值并打印安全告警
+    # 配置后不可变更,否则已入库的密文无法解密(历史 AES 密文会在启动时自动迁移为 SM4)
     secret: ${INSURE_CRYPTO_SECRET:}
+  # ---------------- 短信验证码 ----------------
+  # 运营商的真实发送动作尚未接入:SmsServiceImpl#doSend 只打日志并返回成功,
+  # mock=true 时验证码会随响应回显,便于演示;上线前接入运营商后改为 false
+  sms:
+    mock: true
+    # 注册是否强制校验短信验证码(本地联调可临时关闭)
+    verify-register: true
+    # 验证码有效期(秒)
+    expire-seconds: 300
+    # 同一手机号同一场景重发间隔(秒)
+    resend-interval: 60
+    # 同一手机号每日发送上限
+    daily-limit: 10
+    # 单条验证码允许的校验失败次数
+    max-verify-attempts: 5
+    # 验证码位数
+    code-length: 6
+    # 短信签名与模板编号(接入运营商后使用)
+    sign-name: 安鑫保险
+    template-code: SMS_000000
   upload:
     # 本地存储根目录(Windows 示例:D:/insurance-upload/,Linux 示例:/data/upload/)
     path: ./upload/
@@ -84,6 +105,7 @@ insure:
       # 客户端(客户)免登录接口
       - /auth/login
       - /auth/register
+      - /auth/sms-code
       - /auth/captcha
       # 管理端(业务操作人员)登录入口,与客户端完全独立
       - /admin/auth/login

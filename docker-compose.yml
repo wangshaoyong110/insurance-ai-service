@@ -68,9 +68,12 @@ services:
       REDIS_PORT: 6379
       # 以下三项必须显式提供，缺失时启动会打印告警（JWT 用默认值、API Key 无法解密）
       INSURE_JWT_SECRET: ${INSURE_JWT_SECRET:?请在 .env 中设置 INSURE_JWT_SECRET（长度 >= 32）}
-      INSURE_CRYPTO_SECRET: ${INSURE_CRYPTO_SECRET:?请在 .env 中设置 INSURE_CRYPTO_SECRET（AES 主密钥，配置后不可变更）}
+      INSURE_CRYPTO_SECRET: ${INSURE_CRYPTO_SECRET:?请在 .env 中设置 INSURE_CRYPTO_SECRET（国密 SM4 主密钥，配置后不可变更）}
       # 可选：仅在数据库没有模型配置时用于初始化首条记录，之后以后台配置为准
       INSURE_DEEPSEEK_API_KEY: ${INSURE_DEEPSEEK_API_KEY:-}
+      # 短信：运营商未接入时保持 mock=true（验证码随响应回显、只打日志），接入后改 false
+      INSURE_SMS_MOCK: ${INSURE_SMS_MOCK:-true}
+      INSURE_SMS_VERIFY_REGISTER: ${INSURE_SMS_VERIFY_REGISTER:-true}
       # 内网交付建议关闭接口文档
       SPRINGDOC_API_DOCS_ENABLED: ${SPRINGDOC_API_DOCS_ENABLED:-true}
       SPRINGDOC_SWAGGER_UI_ENABLED: ${SPRINGDOC_SWAGGER_UI_ENABLED:-true}

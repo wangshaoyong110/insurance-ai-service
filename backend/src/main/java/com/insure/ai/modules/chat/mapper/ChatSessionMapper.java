@@ -3,7 +3,6 @@ package com.insure.ai.modules.chat.mapper;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.insure.ai.modules.chat.entity.ChatSession;
 import org.apache.ibatis.annotations.Mapper;
-import org.apache.ibatis.annotations.Select;
 
 import java.util.List;
 import java.util.Map;
@@ -21,11 +20,5 @@ public interface ChatSessionMapper extends BaseMapper<ChatSession> {
      *
      * @return key: cusUserId, value: sessionCount
      */
-    @Select("""
-            SELECT cus_user_id AS cusUserId, COUNT(*) AS sessionCount
-            FROM chat_session
-            WHERE deleted = 0
-            GROUP BY cus_user_id
-            """)
     List<Map<String, Object>> countGroupByCusUser();
 }

@@ -12,7 +12,7 @@ import java.math.BigDecimal;
 
 /**
  * 大模型配置
- * <p>API Key 以 AES-256-GCM 密文存储,只向界面返回掩码</p>
+ * <p>API Key 以国密 SM4-GCM 密文存储,只向界面返回掩码</p>
  *
  * @author insurance-ai
  */

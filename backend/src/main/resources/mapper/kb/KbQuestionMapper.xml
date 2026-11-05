@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  知识库 Mapper
+  说明:手工 SQL 一律写在 XML,Java 接口只保留方法声明。
+-->
+<mapper namespace="com.insure.ai.modules.kb.mapper.KbQuestionMapper">
+
+    <!-- 命中次数自增:直接走数据库累加,避免并发下的读改写丢更新 -->
+    <update id="increaseHitCount">
+        UPDATE kb_question
+        SET hit_count = hit_count + 1
+        WHERE id = #{id}
+    </update>
+
+</mapper>

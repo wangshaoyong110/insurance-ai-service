@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  知识盲区 Mapper
+  说明:手工 SQL 一律写在 XML,Java 接口只保留方法声明。
+-->
+<mapper namespace="com.insure.ai.modules.kb.mapper.ChatUnknownMapper">
+
+    <!--
+      按问题聚合分页
+      status 取 MIN:同一问题只要还有未处理的记录,就仍然算待处理,不会被已处理的行掩盖
+    -->
+    <select id="selectGapPage" resultType="com.insure.ai.modules.kb.dto.GapGroupVO">
+        SELECT question,
+               COUNT(*)         AS hitCount,
+               MAX(best_score)  AS bestScore,
+               MIN(status)      AS status,
+               MAX(id)          AS sampleId,
+               MAX(create_time) AS lastTime
+        FROM chat_unknown
+        WHERE deleted = 0
+        <if test="keyword != null and keyword != ''">
+            AND question LIKE CONCAT('%', #{keyword}, '%')
+        </if>
+        <if test="status != null">
+            AND status = #{status}
+        </if>
+        GROUP BY question
+        ORDER BY hitCount DESC, lastTime DESC
+    </select>
+
+    <!-- 待处理缺口数量(按问题去重) -->
+    <select id="countPendingGroups" resultType="java.lang.Long">
+        SELECT COUNT(DISTINCT question)
+        FROM chat_unknown
+        WHERE deleted = 0
+          AND status = 0
+    </select>
+
+</mapper>

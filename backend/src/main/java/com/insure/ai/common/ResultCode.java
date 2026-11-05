@@ -79,7 +79,12 @@ public enum ResultCode {
 
     /* ---------------- 安全相关 4xxx ---------------- */
     DANGER_PARAM(4001, "请求参数包含非法字符,已被拦截"),
-    TOKEN_EXPIRED(4002, "登录已过期,请重新登录");
+    TOKEN_EXPIRED(4002, "登录已过期,请重新登录"),
+    SMS_SEND_TOO_FREQUENT(4003, "验证码发送过于频繁,请稍后再试"),
+    SMS_DAILY_LIMIT(4004, "今日验证码获取次数已达上限"),
+    SMS_CODE_EMPTY(4005, "请输入短信验证码"),
+    SMS_CODE_ERROR(4006, "短信验证码不正确"),
+    SMS_CODE_EXPIRED(4007, "短信验证码已失效,请重新获取");
 
     /** 状态码 */
     private final Integer code;

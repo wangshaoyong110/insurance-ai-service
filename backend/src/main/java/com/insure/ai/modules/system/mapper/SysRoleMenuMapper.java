@@ -2,7 +2,6 @@ package com.insure.ai.modules.system.mapper;
 
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.insure.ai.modules.system.entity.SysRoleMenu;
-import org.apache.ibatis.annotations.Delete;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 
@@ -20,6 +19,5 @@ public interface SysRoleMenuMapper extends BaseMapper<SysRoleMenu> {
      * @param roleId 角色ID
      * @return 删除行数
      */
-    @Delete("DELETE FROM sys_role_menu WHERE role_id = #{roleId}")
     int deleteByRoleId(@Param("roleId") Long roleId);
 }

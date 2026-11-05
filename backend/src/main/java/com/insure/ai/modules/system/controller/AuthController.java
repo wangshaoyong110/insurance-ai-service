@@ -1,6 +1,7 @@
 package com.insure.ai.modules.system.controller;
 
 import com.insure.ai.aspect.Log;
+import com.insure.ai.common.annotation.RateLimit;
 import com.insure.ai.common.Result;
 import com.insure.ai.common.util.SecurityUtils;
 import com.insure.ai.modules.system.dto.ChangePasswordDTO;
@@ -8,7 +9,11 @@ import com.insure.ai.modules.system.dto.CusUserVO;
 import com.insure.ai.modules.system.dto.LoginDTO;
 import com.insure.ai.modules.system.dto.LoginVO;
 import com.insure.ai.modules.system.dto.RegisterDTO;
+import com.insure.ai.modules.system.dto.SmsCodeVO;
+import com.insure.ai.modules.system.dto.SmsSendDTO;
 import com.insure.ai.modules.system.service.CusAuthService;
+import com.insure.ai.modules.system.service.SmsService;
+import com.insure.ai.common.enums.SmsSceneEnum;
 import com.insure.ai.security.JwtUtils;
 import io.swagger.v3.oas.annotations.security.SecurityRequirements;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -36,6 +41,7 @@ import org.springframework.web.bind.annotation.RestController;
 public class AuthController {
 
     private final CusAuthService cusAuthService;
+    private final SmsService smsService;
     private final JwtUtils jwtUtils;
 
     /**
@@ -46,6 +52,18 @@ public class AuthController {
     @PostMapping("/login")
     public Result<LoginVO<CusUserVO>> login(@Valid @RequestBody LoginDTO dto, HttpServletRequest request) {
         return Result.success("登录成功", cusAuthService.login(dto, request));
+    }
+
+    /**
+     * 获取短信验证码
+     * <p>注册前必须先获取;验证码 5 分钟有效,同一手机号 60 秒内不可重复获取</p>
+     */
+    @Log(module = "客户端-认证", operation = "获取短信验证码")
+    @RateLimit(limit = 5, seconds = 60, message = "获取验证码过于频繁,请稍后再试")
+    @SecurityRequirements
+    @PostMapping("/sms-code")
+    public Result<SmsCodeVO> sendSmsCode(@Valid @RequestBody SmsSendDTO dto) {
+        return Result.success("验证码已发送", smsService.sendVerifyCode(dto.getPhone(), SmsSceneEnum.of(dto.getScene())));
     }
 
     /**

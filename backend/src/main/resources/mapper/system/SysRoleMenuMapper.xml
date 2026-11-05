@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  角色菜单关联 Mapper
+  说明:手工 SQL 一律写在 XML,Java 接口只保留方法声明。
+-->
+<mapper namespace="com.insure.ai.modules.system.mapper.SysRoleMenuMapper">
+
+    <!-- 物理删除某角色的全部菜单授权:重新授权前先清空,避免逻辑删除导致唯一键冲突 -->
+    <delete id="deleteByRoleId">
+        DELETE FROM sys_role_menu
+        WHERE role_id = #{roleId}
+    </delete>
+
+</mapper>

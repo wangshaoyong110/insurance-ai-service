@@ -15,7 +15,7 @@ import type { AiModelSaveParams } from '@/types/api';
 
 /**
  * 大模型配置(管理端)
- * - API Key 由后端 AES-256-GCM 加密后入库,列表只返回掩码
+ * - API Key 由后端国密 SM4-GCM 加密后入库,列表只返回掩码
  * - 改完立即生效:对话时按数据库中的默认配置构建 ChatModel,无需重启
  */
 
@@ -275,7 +275,7 @@ async function handleDelete(row: unknown): Promise<void> {
   <div class="page-container">
     <el-alert type="info" :closable="false" show-icon class="tip">
       <template #title>
-        API Key 使用 AES-256-GCM 加密后存入数据库,页面只展示掩码;配置保存后立即生效,无需重启服务。
+        API Key 使用国密 SM4-GCM 加密后存入数据库,页面只展示掩码;配置保存后立即生效,无需重启服务。
       </template>
       <div class="tip__desc">
         内网部署时把「接口地址」指向行内模型网关即可(兼容 OpenAI 协议),模型与地址都可在本页调整。

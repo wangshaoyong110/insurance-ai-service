@@ -11,7 +11,7 @@
 | 分组 | JSON 地址 | 覆盖范围 |
 | --- | --- | --- |
 | 管理端接口 | `/api/v3/api-docs/admin-api` | `/admin/**`（47 个接口 / 10 个分组） |
-| 客户端(手机 H5)接口 | `/api/v3/api-docs/client-api` | `/auth/**`、`/chat/**`、`/file/**`（15 个接口 / 3 个分组） |
+| 客户端(手机 H5)接口 | `/api/v3/api-docs/client-api` | `/auth/**`、`/chat/**`、`/file/**`（16 个接口 / 3 个分组） |
 
 调试步骤：先调 `/admin/auth/login` 或 `/auth/login` 取 `data.token` → 点 UI 右上角 **Authorize** 填入 token（无需手写 `Bearer ` 前缀）→ 再调其他接口。
 
@@ -66,7 +66,8 @@
 | 方法 | 路径 | 说明 | 参数 |
 | --- | --- | --- | --- |
 | POST | `/auth/login` | 客户登录 | body: `{ account, password }`，`account` 为手机号或账号 |
-| POST | `/auth/register` | 客户注册（手机号唯一） | body: `{ phone, password, confirmPassword, nickname?, realName?, email? }` |
+| POST | `/auth/sms-code` | 获取短信验证码 | body: `{ phone, scene }`，`scene` 取 `register`/`login`/`reset`；60 秒内重发返回 `4003` |
+| POST | `/auth/register` | 客户注册（手机号唯一） | body: `{ phone, password, confirmPassword, smsCode, nickname?, realName?, email? }` |
 | POST | `/auth/logout` | 退出登录 | header: token |
 | GET | `/auth/me` | 当前客户信息 | - |
 | PUT | `/auth/password` | 修改密码 | body: `{ oldPassword, newPassword, confirmPassword }` |
@@ -346,7 +347,7 @@ AI 答得好不好、答不了怎么办，这两件事都要有出口。
 
 ## 十六、后台-AI 模型配置 `/admin/model`
 
-> 需要管理端 token。API Key 明文**只进不出**：提交后由后端 AES-256-GCM 加密入库，查询接口只返回掩码。
+> 需要管理端 token。API Key 明文**只进不出**：提交后由后端国密 **SM4-GCM** 加密入库（密文带 `SM4:` 前缀），查询接口只返回掩码；历史 AES 密文在启动时自动迁移为 SM4。
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |

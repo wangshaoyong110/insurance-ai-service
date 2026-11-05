@@ -7,7 +7,7 @@ import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.insure.ai.common.BusinessException;
 import com.insure.ai.common.ResultCode;
 import com.insure.ai.common.enums.AiProviderEnum;
-import com.insure.ai.common.util.AesCryptoUtil;
+import com.insure.ai.common.crypto.SensitiveDataCipher;
 import com.insure.ai.modules.ai.entity.AiModelConfig;
 import com.insure.ai.modules.ai.mapper.AiModelConfigMapper;
 import lombok.RequiredArgsConstructor;
@@ -22,7 +22,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import org.springframework.web.client.RestClient;
 
-import javax.crypto.SecretKey;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.LocalDateTime;
@@ -55,7 +54,7 @@ public class AiModelFactory {
     private static final String PROBE_PROMPT = "请回复两个字:你好";
 
     private final AiModelConfigMapper aiModelConfigMapper;
-    private final SecretKey cryptoSecretKey;
+    private final SensitiveDataCipher sensitiveDataCipher;
 
     /** 配置ID -> 已构建的模型实例 */
     private final Map<Long, CachedModel> modelCache = new ConcurrentHashMap<>();
@@ -144,7 +143,7 @@ public class AiModelFactory {
      * 解密配置中的 API Key
      */
     public String decryptApiKey(AiModelConfig config) {
-        return AesCryptoUtil.decrypt(config.getApiKeyCipher(), cryptoSecretKey);
+        return sensitiveDataCipher.decrypt(config.getApiKeyCipher());
     }
 
     /**

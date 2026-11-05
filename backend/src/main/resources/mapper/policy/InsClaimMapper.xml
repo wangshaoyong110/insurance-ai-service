@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!--
+  理赔 Mapper
+  说明:手工 SQL 一律写在 XML,Java 接口只保留方法声明。
+-->
+<mapper namespace="com.insure.ai.modules.policy.mapper.InsClaimMapper">
+
+    <!--
+      统计指定保单的理赔次数
+      只按当前页的 policy_id 过滤,扫描量与页大小相关;空集合时由调用方跳过,避免 IN () 语法错误
+    -->
+    <select id="countByPolicyIds" resultType="java.util.Map">
+        SELECT policy_id AS policyId, COUNT(*) AS claimCount
+        FROM ins_claim
+        WHERE deleted = 0
+          AND policy_id IN
+        <foreach collection="policyIds" item="id" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+        GROUP BY policy_id
+    </select>
+
+</mapper>
