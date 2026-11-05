@@ -28,7 +28,9 @@ die()  { printf '\n\033[1;31m==> 失败: %s\033[0m\n' "$*" >&2; exit 1; }
 # ---------- 1. SSH 爆破防护 ----------
 log "SSH 爆破防护"
 if command -v iptables >/dev/null 2>&1; then
-    SSH_PORT=$(sshd -T 2>/dev/null | awk '/^port / {print $2; exit}')
+    # 注意：awk 不能读到第一行就 exit —— sshd -T 仍在写管道，提前关闭会让它收到
+    # SIGPIPE，配合 set -o pipefail 整个脚本会以 141 静默退出（首次部署踩过）。
+    SSH_PORT=$(sshd -T 2>/dev/null | awk '/^port / {p = $2} END {if (p == "") p = 22; print p}')
     SSH_PORT=${SSH_PORT:-22}
 
     cat > /usr/local/sbin/ssh-guard.sh <<EOF
