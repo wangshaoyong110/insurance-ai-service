@@ -2,6 +2,10 @@
 FROM node:22-alpine AS build
 WORKDIR /app
 
+# 国内 npm 官方源 RTT 高，npmmirror 快 5 倍以上；海外构建可覆盖
+ARG NPM_REGISTRY=https://registry.npmmirror.com
+RUN npm config set registry "$NPM_REGISTRY"
+
 # 先装依赖，利用层缓存
 COPY frontend/package.json frontend/package-lock.json* ./
 RUN npm ci || npm install

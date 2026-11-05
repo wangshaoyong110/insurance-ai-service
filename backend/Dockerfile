@@ -3,6 +3,15 @@
 FROM maven:3.9-eclipse-temurin-17 AS build
 WORKDIR /build
 
+# 国内直连 Maven Central 实测只有 ~160KB/s，全量依赖会拖到二十分钟以上；
+# 阿里云镜像 ~12MB/s，差两个数量级。海外构建可覆盖为官方源。
+ARG MAVEN_MIRROR=https://maven.aliyun.com/repository/public
+RUN if [ -n "$MAVEN_MIRROR" ]; then \
+        mkdir -p /root/.m2 && \
+        printf '<settings><mirrors><mirror><id>mirror</id><mirrorOf>central</mirrorOf><url>%s</url></mirror></mirrors></settings>' \
+            "$MAVEN_MIRROR" > /root/.m2/settings.xml; \
+    fi
+
 COPY backend/pom.xml ./pom.xml
 RUN mvn -B -q dependency:go-offline
 
