@@ -4,7 +4,8 @@
 #   2) docker compose up -d --build
 #   3) 打开 http://localhost  （管理端）/ http://localhost/mobile.html（手机端）
 #
-# 只暴露 80 端口，MySQL / Redis / 后端均不对外，符合内网私有化交付要求。
+# 默认对外暴露 80(Web) + 3306/6379(运维直连,可用 MYSQL_HOST_PORT/REDIS_HOST_PORT 改端口或安全组限源)。
+# MySQL / Redis / 后端之间走内部网络 insurance-net。
 # 公网部署额外做了：Redis 密码、容器资源上限（防单容器拖垮整机）、
 # 容器提权禁用（no-new-privileges / backend 丢弃全部 capability）。
 name: insurance-ai
@@ -22,6 +23,10 @@ services:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
       MYSQL_DATABASE: ${MYSQL_DATABASE:-insurance_ai}
       TZ: Asia/Shanghai
+    ports:
+      # 运维直连入口。公网部署务必在云安全组里把该端口限制为自己的 IP,
+      # 或改用非标准端口(MYSQL_HOST_PORT=13306),否则会被扫描器爆破
+      - "${MYSQL_HOST_PORT:-3306}:3306"
     volumes:
       - mysql-data:/var/lib/mysql
       # 首次启动自动执行 sql/ 下的初始化脚本（按文件名顺序，v2 排在主脚本之后）
@@ -65,6 +70,9 @@ services:
       retries: 6
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:-redis-change-me}
+    ports:
+      # 运维直连入口(已设 requirepass)。同上,公网建议安全组限源或改 REDIS_HOST_PORT
+      - "${REDIS_HOST_PORT:-6379}:6379"
     mem_limit: 256m
     security_opt:
       - no-new-privileges:true
