@@ -57,6 +57,9 @@ public class SecurityConfig {
                 .logout(AbstractHttpConfigurer::disable)
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
+                        // 只对初始 REQUEST 分发做鉴权:SSE 完成后的 ASYNC 分发不会重跑 JWT 过滤器,
+                        // 若对 ASYNC 也鉴权会因安全上下文为空抛 Access Denied,导致流式连接被异常掐断
+                        .shouldFilterAllDispatcherTypes(false)
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                         .requestMatchers(whiteList).permitAll()
                         .requestMatchers(ADMIN_PATTERN).hasRole(ROLE_ADMIN)
