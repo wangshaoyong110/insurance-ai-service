@@ -4,14 +4,29 @@
 
 **核心特点**：双端双体系 · AI 能调工具查真实业务库（保单/理赔）· 模型与 API Key 后台可配且加密落库 · 工具调用强制按登录态过滤防越权。
 
+## 仓库地址
+
+| 平台 | 地址 | 说明 |
+| --- | --- | --- |
+| **Gitee**（主仓库） | https://gitee.com/wang_shao_yong/insurance-ai-service | 国内访问快，Issue / PR 优先在这里 |
+| **GitHub**（镜像） | https://github.com/Wangshaoyong/insurance-ai-service | 海外访问，与 Gitee 自动保持同步 |
+
+两个仓库的默认分支均为 **`master`**，代码完全一致（`main` 为历史分支，同样保持同步）。克隆任选其一：
+
+```bash
+git clone https://gitee.com/wang_shao_yong/insurance-ai-service.git
+# 或
+git clone https://github.com/Wangshaoyong/insurance-ai-service.git
+```
+
 ## 在线演示
 
-> 单台云服务器（腾讯云 2C4G，OpenCloudOS 9）+ Docker Compose 部署：MySQL / Redis / 后端 / Nginx 四个容器，**对外只暴露 80**，数据库与后端不触网。
+> 单台云服务器（腾讯云 2C4G，OpenCloudOS 9）+ Docker Compose 部署：MySQL / Redis / 后端 / Nginx 四个容器，**Web 对外只暴露 80**，数据库与后端走内部网络（运维端口可按需映射）。
 
 | 入口 | 地址 | 账号 | 可体验 |
 | --- | --- | --- | --- |
-| **管理端**（PC 后台） | http://82.156.193.156/ | `admin`（密码不公开，向维护者索取） | 数据概览、服务工单（坐席工作台）、知识库与知识缺口、模型配置、保单理赔、导出 Excel |
-| **手机端**（H5） | http://82.156.193.156/mobile.html | `13900000001`（密码不公开，向维护者索取） | 智能问答（流式）、上传图片/视频、实名认证、转人工、历史会话 |
+| **管理端**（PC 后台） | http://82.156.193.156/ | `admin` / `123456`（超管）· `operator` / `123456`（客服专员） | 数据概览、服务工单（坐席工作台）、知识库与知识缺口、模型配置、保单理赔、导出 Excel |
+| **手机端**（H5） | http://82.156.193.156/mobile.html | `13900000001` / `123456` | 智能问答（流式）、上传图片/视频、实名认证、转人工、历史会话 |
 
 > 公网实例默认关闭了接口文档与 actuator（Nginx 返回 404）。本地启动后可在 http://localhost:8080/api/doc.html 调试全部 79 个接口。
 
@@ -28,7 +43,7 @@
 ### 自己部署
 
 ```bash
-git clone -b main https://gitee.com/wang_shao_yong/insurance-ai-service.git && cd insurance-ai-service
+git clone https://gitee.com/wang_shao_yong/insurance-ai-service.git && cd insurance-ai-service   # 默认分支 master 即最新代码
 sudo bash deploy/deploy.sh          # 装 Docker → 生成密钥 → 构建 → 起容器 → 健康检查 → 宿主机加固
 sudo bash deploy/deploy.sh --no-harden                             # 跳过宿主机加固
 sudo bash deploy/deploy.sh --mirror https://docker.m.daocloud.io   # 国内拉镜像慢时
