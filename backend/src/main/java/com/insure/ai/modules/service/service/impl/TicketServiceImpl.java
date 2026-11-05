@@ -216,14 +216,22 @@ public class TicketServiceImpl implements TicketService {
         }
         ticketMapper.updateById(update);
         // 工单状态与会话状态必须同步:接单即接管会话,结单/取消则把会话交回 AI
-        if (ticket.getSessionId() != null) {
-            if (target == TicketStatusEnum.PROCESSING) {
+        if (target == TicketStatusEnum.PROCESSING) {
+            if (ticket.getSessionId() == null) {
+                // 提交工单时没有关联会话(如客户在「我的工单」页直接提交):
+                // 接单时补建一个会话接管,否则坐席接单后没有任何联系客户的通道
+                Long newSessionId = chatService.createTakeoverSession(
+                        ticket.getCusUserId(), id, ticket.getQuestion(), operatorId, operatorName);
+                update.setSessionId(newSessionId);
+                ticketMapper.updateById(update);
+                log.info("[工单] 接单补建会话 no={} sessionId={}", ticket.getTicketNo(), newSessionId);
+            } else {
                 chatService.takeover(ticket.getSessionId(), id, operatorId, operatorName);
-            } else if (target == TicketStatusEnum.FINISHED) {
-                chatService.finishTakeover(ticket.getSessionId(), dto.getReply(), operatorName);
-            } else if (target == TicketStatusEnum.CANCELED) {
-                chatService.cancelTakeover(ticket.getSessionId(), "人工工单已取消,AI 助手已恢复服务。");
             }
+        } else if (target == TicketStatusEnum.FINISHED && ticket.getSessionId() != null) {
+            chatService.finishTakeover(ticket.getSessionId(), dto.getReply(), operatorName);
+        } else if (target == TicketStatusEnum.CANCELED && ticket.getSessionId() != null) {
+            chatService.cancelTakeover(ticket.getSessionId(), "人工工单已取消,AI 助手已恢复服务。");
         }
         log.info("[工单] 状态流转 no={} {} -> {} 操作人={}",
                 ticket.getTicketNo(), TicketStatusEnum.descOf(ticket.getStatus()),

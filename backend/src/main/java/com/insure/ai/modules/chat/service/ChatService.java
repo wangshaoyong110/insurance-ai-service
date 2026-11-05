@@ -102,6 +102,16 @@ public interface ChatService {
     void takeover(Long sessionId, Long ticketId, Long operatorId, String operatorName);
 
     /**
+     * 为客户新建一个会话并直接进入人工接管模式
+     * <p>用于工单提交时没有关联会话的场景(如客户在「我的工单」页直接提交):
+     * 接单时补建会话,否则坐席接单后没有任何联系客户的通道。
+     * 新会话会出现在客户的「历史会话列表」里,系统提示「客服已接入」,客户可直接回复。</p>
+     *
+     * @return 新建的会话ID(调用方需回写到工单的 session_id)
+     */
+    Long createTakeoverSession(Long cusUserId, Long ticketId, String title, Long operatorId, String operatorName);
+
+    /**
      * 结单:把坐席答复写入会话、插入结束提示,并把会话交回 AI
      */
     void finishTakeover(Long sessionId, String reply, String operatorName);

@@ -53,3 +53,4 @@ data/
 *.tmp
 # 本地截图/调试脚本目录
 .tmp/
+backend.log

@@ -98,11 +98,28 @@ class TicketServiceImplTest {
     }
 
     @Test
-    @DisplayName("未关联会话的工单不影响任何会话")
-    void ticketWithoutSessionShouldNotTouchChat() {
-        when(ticketMapper.selectById(TICKET_ID)).thenReturn(ticket(0, null));
+    @DisplayName("未关联会话的工单接单时补建会话并回写 sessionId")
+    void ticketWithoutSessionShouldCreateOneOnAccept() {
+        ServiceTicket noSession = ticket(0, null);
+        when(ticketMapper.selectById(TICKET_ID)).thenReturn(noSession);
+        when(chatService.createTakeoverSession(CUSTOMER_ID, TICKET_ID, noSession.getQuestion(),
+                OPERATOR_ID, OPERATOR)).thenReturn(SESSION_ID);
         TicketHandleDTO dto = new TicketHandleDTO();
         dto.setStatus(1);
+
+        ticketService.handle(TICKET_ID, dto, OPERATOR_ID, OPERATOR);
+
+        verify(chatService).createTakeoverSession(CUSTOMER_ID, TICKET_ID, noSession.getQuestion(),
+                OPERATOR_ID, OPERATOR);
+        verify(chatService, never()).takeover(any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("结单/取消时未关联会话的工单不触碰会话")
+    void closedTicketWithoutSessionShouldNotTouchChat() {
+        when(ticketMapper.selectById(TICKET_ID)).thenReturn(ticket(1, null));
+        TicketHandleDTO dto = new TicketHandleDTO();
+        dto.setStatus(3);
 
         ticketService.handle(TICKET_ID, dto, OPERATOR_ID, OPERATOR);
 

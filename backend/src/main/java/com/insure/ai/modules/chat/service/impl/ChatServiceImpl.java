@@ -416,6 +416,17 @@ public class ChatServiceImpl implements ChatService {
     }
 
     /**
+     * 补建会话并接管:建会话 + 接管两步在同一事务里,失败即整体回滚
+     */
+    @Transactional(rollbackFor = Exception.class)
+    @Override
+    public Long createTakeoverSession(Long cusUserId, Long ticketId, String title, Long operatorId, String operatorName) {
+        ChatSessionVO created = createSession(cusUserId, title);
+        takeover(created.getId(), ticketId, operatorId, operatorName);
+        return created.getId();
+    }
+
+    /**
      * 结单:坐席答复写入会话,交回 AI
      */
     @Override
