@@ -11,6 +11,8 @@ import { useCusUserStore } from '@/mobile/stores/cusUser';
 const router = useRouter();
 const route = useRoute();
 const cusUserStore = useCusUserStore();
+/** 演示账号提示只在本地开发显示;生产构建隐藏(公网部署后默认密码已修改) */
+const showDemoHint = import.meta.env.VITE_DEMO_HINT !== 'false';
 
 /** 当前页签:login-登录 register-注册 */
 const activeTab = ref<'login' | 'register'>('login');
@@ -313,7 +315,7 @@ function switchTab(tab: 'login' | 'register'): void {
         <button type="button" class="primary-btn" :disabled="loading" @click="handleLogin">
           {{ loading ? '登录中...' : '登录' }}
         </button>
-        <p class="form-tip">演示账号:13900000001 / 123456</p>
+        <p v-if="showDemoHint" class="form-tip">演示账号:13900000001 / 123456</p>
       </div>
 
       <!-- 注册 -->

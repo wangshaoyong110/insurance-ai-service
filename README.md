@@ -6,13 +6,14 @@
 
 ## 在线演示
 
-> 单台云服务器 + Docker Compose 部署（MySQL / Redis / 后端 / Nginx 四个容器，**只对外暴露 80**，数据库与后端不触网）。
+> 单台云服务器（腾讯云 2C4G，OpenCloudOS 9）+ Docker Compose 部署：MySQL / Redis / 后端 / Nginx 四个容器，**对外只暴露 80**，数据库与后端不触网。
 
-| 入口 | 地址 | 账号 / 密码 | 可体验 |
+| 入口 | 地址 | 账号 | 可体验 |
 | --- | --- | --- | --- |
-| **管理端**（PC 后台） | http://YOUR_SERVER_IP/ | `admin` / `123456` | 数据概览、服务工单（坐席工作台）、知识库与知识缺口、模型配置、保单理赔、导出 Excel |
-| **手机端**（H5） | http://YOUR_SERVER_IP/mobile.html | `13900000001` / `123456` | 智能问答（流式）、上传图片/视频、实名认证、转人工、历史会话 |
-| **接口文档** | http://YOUR_SERVER_IP/api/doc.html | 无需登录 | 79 个接口的在线调试 |
+| **管理端**（PC 后台） | http://82.156.193.156/ | `admin`（密码不公开，向维护者索取） | 数据概览、服务工单（坐席工作台）、知识库与知识缺口、模型配置、保单理赔、导出 Excel |
+| **手机端**（H5） | http://82.156.193.156/mobile.html | `13900000001`（密码不公开，向维护者索取） | 智能问答（流式）、上传图片/视频、实名认证、转人工、历史会话 |
+
+> 公网实例默认关闭了接口文档与 actuator（Nginx 返回 404）。本地启动后可在 http://localhost:8080/api/doc.html 调试全部 79 个接口。
 
 **三分钟体验完整闭环**：
 
@@ -27,12 +28,13 @@
 ### 自己部署
 
 ```bash
-git clone <本仓库地址> && cd insurance-ai-service
-sudo bash deploy/deploy.sh          # 装 Docker → 生成密钥 → 构建 → 起容器 → 健康检查
+git clone -b main https://gitee.com/wang_shao_yong/insurance-ai-service.git && cd insurance-ai-service
+sudo bash deploy/deploy.sh          # 装 Docker → 生成密钥 → 构建 → 起容器 → 健康检查 → 宿主机加固
+sudo bash deploy/deploy.sh --no-harden                             # 跳过宿主机加固
 sudo bash deploy/deploy.sh --mirror https://docker.m.daocloud.io   # 国内拉镜像慢时
 ```
 
-脚本幂等（重跑只重建镜像，不动数据卷），执行完自动打印三个入口地址。详见「十、Docker 与 Nginx 部署」。
+脚本幂等（重跑只重建镜像，不动数据卷），执行完自动打印入口地址。详见「十、Docker 与 Nginx 部署」与「十一、公网安全加固」。
 
 ## 界面预览
 
@@ -791,12 +793,49 @@ docker compose up -d --build
 | `mysql` | MySQL 8，首次启动自动执行 `sql/*.sql` | ❌ |
 | `redis` | Redis 7，AOF 持久化 | ❌ |
 
-- 日志与上传文件挂到 `./data/logs`、`./data/upload`，容器重建不丢。
+- 日志与上传文件挂到 `./data/logs`、`./data/upload`，容器重建不丢（脚本自动 `chown 1001:1001`，属主必须是容器内的非 root 用户）。
 - `backend` 依赖 `mysql`/`redis` 的 healthcheck 通过后才启动；`web` 依赖 `backend` 健康。
-- 后端镜像以非 root 用户运行，健康检查走 `/api/actuator/health`。
+  首次启动 MySQL 要跑完 18 张建表 + 初始化数据，健康检查窗口给到了 `start_period=120s + retries=30`，窗口太小会让 compose 误判 unhealthy 中止部署。
+- 后端镜像以非 root 用户（uid 1001）运行并 `cap_drop: ALL`，健康检查走 `/api/actuator/health`。
 - 访问：管理端 `http://localhost`，手机端 `http://localhost/mobile.html`。
 
-### 2. 手工部署（已有 Nginx / 需要接入行内网关）
+### 2. 公网部署的安全限制（deploy.sh 自动完成）
+
+`deploy.sh` 会在容器起来后自动执行 `deploy/hardening.sh`（`--no-harden` 可跳过）。三层防线：
+
+**Nginx 层（`deploy/nginx.conf`）——公网唯一入口**
+
+| 措施 | 配置 |
+| --- | --- |
+| 接口文档 / Swagger / actuator | 一律 404，容器探活走容器内网不受影响 |
+| 限流 | 全局 30 r/s；登录/注册/验证码 12 r/min；短信 3 r/min；聊天 20 r/min；超出返回 JSON 429 |
+| 并发 | 单 IP 最多 20 个并发连接 |
+| 方法白名单 | 只放行 GET/POST/PUT/DELETE/HEAD/OPTIONS，其余 405 |
+| 敏感文件 | `.git`/`.env`/`*.sql`/`*.log`/`*.yml` 等后缀全部 404 |
+| 安全响应头 | CSP（前端全同源，可收得很紧）、`X-Frame-Options`、`nosniff`、`Permissions-Policy`、`COOP` |
+| 版本隐藏 | `server_tokens off`，响应只显示 `Server: nginx` |
+
+**容器层（`docker-compose.yml`）**
+
+- Redis 设置 `requirepass`（虽然只在 Docker 内网，仍防同宿主机其它容器横向访问）
+- 四个容器全部设 `mem_limit` / `pids_limit`，单容器失控不会拖垮 4G 小机器
+- `backend` `cap_drop: ALL` + 所有服务 `no-new-privileges:true`
+- 默认关闭 springdoc 与验证码 debug 回显（`INSURE_CAPTCHA_DEBUG=false`，否则验证码明文随接口返回，等于没有验证码）
+
+**宿主机层（`deploy/hardening.sh`，可重复执行）**
+
+- SSH 爆破防护：iptables recent 模块，同一 IP 60 秒内 12 次建连即 DROP，规则由 `ssh-guard.service` 开机自动恢复（服务器上没有 fail2ban 包，用 iptables 自实现）
+- sshd 收紧 `MaxAuthTries=4`、`LoginGraceTime=30`（刻意不改密码登录方式，避免锁死运维）
+- sysctl：SYN cookies、反向路径校验、忽略 ICMP 重定向
+- 执行完做对外端口审计：应该只有 22 与 80
+
+**应用层（部署后必做）**
+
+- `deploy.sh` 生成的 `.env` 里 JWT / SM4 主密钥 / 数据库 / Redis 密码全部随机
+- **登录后台立刻修改 admin 与演示账号的默认密码**——公网上 `admin/123456` 几小时内就会被扫出来
+- 未接入真实短信通道前 `INSURE_SMS_MOCK=true`，验证码会随接口回显，任意手机号可被注册；正式上线必须置 `false` 并接入运营商
+
+### 3. 手工部署（已有 Nginx / 需要接入行内网关）
 
 ```bash
 # 后端
@@ -834,8 +873,11 @@ location / {
 }
 ```
 
-> `deploy/nginx.conf` 另外处理了：静态资源长缓存、HTML 不缓存、`gzip` 不含 `text/event-stream`、
-> 安全响应头（`X-Content-Type-Options` / `X-Frame-Options` / `Referrer-Policy`）、`/healthz` 探活。
+> `deploy/nginx.conf` 另外处理了：四条限流带、接口文档/actuator 404、`.git`/`.env` 等敏感文件 404、
+> CSP 等安全响应头、静态资源长缓存、HTML 不缓存、`gzip` 不含 `text/event-stream`、`/healthz` 探活。
+>
+> 注意：配置里 `include /etc/nginx/snippets/proxy.inc` 与 `sec-headers.inc`，手工部署时需要把仓库的
+> `deploy/nginx-proxy.inc` 和 `deploy/nginx-sec-headers.inc` 放到 Nginx 的 `/etc/nginx/snippets/` 目录（没有就新建）。
 
 手机端使用 hash 路由，`http://your-domain.com/mobile.html` 可直接打开，不依赖回退规则。
 

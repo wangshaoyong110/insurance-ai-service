@@ -17,6 +17,8 @@ const menuStore = useMenuStore();
 
 const formRef = ref<{ validate: () => Promise<boolean> }>();
 const loading = ref(false);
+/** 演示账号提示只在本地开发显示;生产构建(VITE_DEMO_HINT=false)隐藏,避免公网上误导用户 */
+const showDemoHint = import.meta.env.VITE_DEMO_HINT !== 'false';
 const form = reactive({
   account: '',
   password: '',
@@ -164,7 +166,7 @@ function openCustomerSite(): void {
           </el-button>
         </el-form>
 
-        <div class="form-tips">
+        <div class="form-tips" v-if="showDemoHint">
           <span>演示账号:admin / 123456(超管)、operator / 123456(客服专员)</span>
         </div>
 

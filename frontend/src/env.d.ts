@@ -14,6 +14,8 @@ interface ImportMetaEnv {
   readonly VITE_API_BASE_URL: string;
   /** 本地代理目标(仅开发环境使用) */
   readonly VITE_PROXY_TARGET?: string;
+  /** 是否显示演示账号提示(仅本地开发为 true,生产构建必须 false) */
+  readonly VITE_DEMO_HINT?: string;
 }
 
 interface ImportMeta {
