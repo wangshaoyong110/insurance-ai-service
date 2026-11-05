@@ -20,7 +20,11 @@ RUN apk add --no-cache tzdata \
     && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime \
     && echo $TZ > /etc/timezone
 
+# 站点配置 + 两个被 include 的片段（限流/安全头/反代公共参数）
+RUN mkdir -p /etc/nginx/snippets
 COPY deploy/nginx.conf /etc/nginx/conf.d/default.conf
+COPY deploy/nginx-proxy.inc /etc/nginx/snippets/proxy.inc
+COPY deploy/nginx-sec-headers.inc /etc/nginx/snippets/sec-headers.inc
 COPY --from=build /app/dist /usr/share/nginx/html
 
 EXPOSE 80

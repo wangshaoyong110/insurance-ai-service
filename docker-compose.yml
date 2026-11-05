@@ -5,6 +5,8 @@
 #   3) 打开 http://localhost  （管理端）/ http://localhost/mobile.html（手机端）
 #
 # 只暴露 80 端口，MySQL / Redis / 后端均不对外，符合内网私有化交付要求。
+# 公网部署额外做了：Redis 密码、容器资源上限（防单容器拖垮整机）、
+# 容器提权禁用（no-new-privileges / backend 丢弃全部 capability）。
 name: insurance-ai
 
 services:
@@ -30,20 +32,40 @@ services:
       timeout: 5s
       retries: 12
       start_period: 40s
+    # 资源上限：单容器失控时只影响自己，不会把 4G 小机器整机拖死
+    mem_limit: 768m
+    pids_limit: 2048
+    security_opt:
+      - no-new-privileges:true
     networks: [insurance-net]
 
   redis:
     image: redis:7-alpine
     container_name: insurance-ai-redis
     restart: unless-stopped
-    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "allkeys-lru"]
+    # 即使容器网络不对外，Redis 仍加密码：多一层，防同宿主机其它容器横向访问
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --maxmemory
+      - 200mb
+      - --maxmemory-policy
+      - allkeys-lru
+      - --requirepass
+      - ${REDIS_PASSWORD:-redis-change-me}
     volumes:
       - redis-data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "redis-cli --no-auth-warning -a $$REDIS_PASSWORD ping | grep -q PONG"]
       interval: 10s
       timeout: 3s
       retries: 6
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-redis-change-me}
+    mem_limit: 256m
+    security_opt:
+      - no-new-privileges:true
     networks: [insurance-net]
 
   backend:
@@ -66,6 +88,7 @@ services:
       MYSQL_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
       REDIS_HOST: redis
       REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-redis-change-me}
       # 以下三项必须显式提供，缺失时启动会打印告警（JWT 用默认值、API Key 无法解密）
       INSURE_JWT_SECRET: ${INSURE_JWT_SECRET:?请在 .env 中设置 INSURE_JWT_SECRET（长度 >= 32）}
       INSURE_CRYPTO_SECRET: ${INSURE_CRYPTO_SECRET:?请在 .env 中设置 INSURE_CRYPTO_SECRET（国密 SM4 主密钥，配置后不可变更）}
@@ -80,7 +103,7 @@ services:
       INSURE_SMS_GLOBAL_DAILY_LIMIT: ${INSURE_SMS_GLOBAL_DAILY_LIMIT:-1000}
       # 图形验证码:生产必须 enabled=true 且 debug=false(否则验证码明文回显)
       INSURE_CAPTCHA_ENABLED: ${INSURE_CAPTCHA_ENABLED:-true}
-      INSURE_CAPTCHA_DEBUG: ${INSURE_CAPTCHA_DEBUG:-true}
+      INSURE_CAPTCHA_DEBUG: ${INSURE_CAPTCHA_DEBUG:-false}
       # 文件上传限额:全局硬上限 + 分业务限额(与全局取小)
       INSURE_UPLOAD_MAX_SIZE: ${INSURE_UPLOAD_MAX_SIZE:-50MB}
       INSURE_UPLOAD_AVATAR_LIMIT: ${INSURE_UPLOAD_AVATAR_LIMIT:-2MB}
@@ -88,13 +111,21 @@ services:
       INSURE_UPLOAD_CHAT_IMAGE_LIMIT: ${INSURE_UPLOAD_CHAT_IMAGE_LIMIT:-10MB}
       INSURE_UPLOAD_CHAT_VIDEO_LIMIT: ${INSURE_UPLOAD_CHAT_VIDEO_LIMIT:-50MB}
       INSURE_UPLOAD_COMMON_LIMIT: ${INSURE_UPLOAD_COMMON_LIMIT:-20MB}
-      # 内网交付建议关闭接口文档
-      SPRINGDOC_API_DOCS_ENABLED: ${SPRINGDOC_API_DOCS_ENABLED:-true}
-      SPRINGDOC_SWAGGER_UI_ENABLED: ${SPRINGDOC_SWAGGER_UI_ENABLED:-true}
+      # 公网部署默认关闭接口文档（Nginx 层还额外拦了一道）
+      SPRINGDOC_API_DOCS_ENABLED: ${SPRINGDOC_API_DOCS_ENABLED:-false}
+      SPRINGDOC_SWAGGER_UI_ENABLED: ${SPRINGDOC_SWAGGER_UI_ENABLED:-false}
     volumes:
       # 日志与上传文件落宿主机，容器重建不丢
       - ./data/logs:/app/logs
       - ./data/upload:/app/upload
+    # 4G 小机器上给后端封顶 1G（JVM 按 MaxRAMPercentage=75 取到约 768M 堆）
+    mem_limit: 1024m
+    pids_limit: 4096
+    # 丢弃全部 Linux capability：后端只需要监听 8080（非特权端口），不需要任何特权
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     networks: [insurance-net]
 
   web:
@@ -108,6 +139,9 @@ services:
         condition: service_healthy
     ports:
       - "${WEB_PORT:-80}:80"
+    mem_limit: 256m
+    security_opt:
+      - no-new-privileges:true
     networks: [insurance-net]
 
 volumes:

@@ -5,8 +5,9 @@
 # 用法(在服务器上、项目根目录执行):
 #   sudo bash deploy/deploy.sh
 #   sudo bash deploy/deploy.sh --mirror https://docker.m.daocloud.io   # 国内拉镜像慢时指定加速
+#   sudo bash deploy/deploy.sh --no-harden                            # 跳过宿主机加固
 #
-# 做的事:装 Docker → 生成 .env(随机密钥) → 构建镜像 → 起容器 → 健康检查
+# 做的事:装 Docker → 生成 .env(随机密钥) → 构建镜像 → 起容器 → 健康检查 → 宿主机加固
 # 幂等:重复执行只重建镜像,不删数据(MySQL/Redis 在 named volume 里)
 #
 set -euo pipefail
@@ -15,9 +16,11 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 MIRROR=""
+HARDEN=1
 while [ $# -gt 0 ]; do
     case "$1" in
         --mirror) MIRROR="${2:-}"; shift 2 ;;
+        --no-harden) HARDEN=0; shift ;;
         -h|--help) sed -n '2,12p' "$0"; exit 0 ;;
         *) echo "未知参数: $1" >&2; exit 1 ;;
     esac
@@ -111,6 +114,7 @@ else
     JWT_SECRET=$(head -c 64 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 48)
     CRYPTO_SECRET=$(head -c 64 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 40)
     DB_PASS=$(head -c 32 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 24)
+    REDIS_PASS=$(head -c 32 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 24)
     cat > .env <<EOF
 # 由 deploy/deploy.sh 自动生成于 $(date '+%Y-%m-%d %H:%M:%S')
 # 警告:INSURE_CRYPTO_SECRET 一旦用于加密模型 Key 就不能再改,否则已存的 Key 无法解密
@@ -119,6 +123,8 @@ WEB_PORT=80
 
 MYSQL_DATABASE=insurance_ai
 MYSQL_ROOT_PASSWORD=${DB_PASS}
+# Redis 只在 Docker 内网,仍设密码:防止同宿主机其他容器横向访问
+REDIS_PASSWORD=${REDIS_PASS}
 
 INSURE_JWT_SECRET=${JWT_SECRET}
 INSURE_CRYPTO_SECRET=${CRYPTO_SECRET}
@@ -143,8 +149,9 @@ INSURE_UPLOAD_COMMON_LIMIT=20MB
 # 模型 Key 留空:首次启动不创建模型配置,登录后台「系统管理-模型配置」录入
 INSURE_DEEPSEEK_API_KEY=
 
-SPRINGDOC_API_DOCS_ENABLED=true
-SPRINGDOC_SWAGGER_UI_ENABLED=true
+# 公网部署关闭接口文档(Nginx 层另有一道 404 拦截)
+SPRINGDOC_API_DOCS_ENABLED=false
+SPRINGDOC_SWAGGER_UI_ENABLED=false
 EOF
     chmod 600 .env
     ok ".env 已生成(权限 600)"
@@ -186,15 +193,22 @@ for i in $(seq 1 20); do
     sleep 5
 done
 
+# ---------- 6. 宿主机加固 ----------
+if [ "$HARDEN" -eq 1 ] && [ -f deploy/hardening.sh ]; then
+    bash deploy/hardening.sh || warn "加固脚本执行异常,不影响业务容器,可稍后单独重跑"
+fi
+
 HOST_IP=$(curl -fsS --max-time 3 https://ipinfo.io/ip 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}')
 log "部署完成"
 cat <<EOF
 
   管理端     http://${HOST_IP}/
   手机端     http://${HOST_IP}/mobile.html
-  接口文档   http://${HOST_IP}/api/doc.html
 
   账号       管理端 admin / 123456     手机端 13900000001 / 123456
+             ⚠ 公网环境请登录后立刻修改默认密码（右上角头像 → 修改密码）
+
+  已关闭     接口文档 / Swagger / actuator 均不对公网开放（Nginx 404）
 
   下一步     登录后台「系统管理-模型配置」填入 API Key 并点「测试连通性」,
             否则发送消息会提示 AI 调用失败。
@@ -202,4 +216,5 @@ cat <<EOF
   常用命令   docker compose ps
              docker compose logs -f backend
              docker compose restart backend
+             docker stats --no-stream
 EOF
