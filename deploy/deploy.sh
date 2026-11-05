@@ -158,7 +158,10 @@ EOF
 fi
 
 mkdir -p data/logs data/upload
-ok "日志与上传目录就绪: ./data/"
+# 后端镜像以非 root（uid 1001）运行，挂载目录属主必须是它，否则 logback 写日志直接
+# Permission denied 然后启动失败——容器会一直 Restarting，日志里只有一堆堆栈
+chown -R 1001:1001 data/logs data/upload
+ok "日志与上传目录就绪: ./data/（属主 1001:1001）"
 
 # ---------- 4. 构建并启动 ----------
 log "构建镜像并启动(首次约 5-15 分钟,取决于机器与网络)"

@@ -30,8 +30,10 @@ services:
       test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
       interval: 10s
       timeout: 5s
-      retries: 12
-      start_period: 40s
+      # 首次启动要跑完 18 张建表 + 初始化数据，在 2C4G 上实测约 90s。
+      # 窗口给窄了（曾用 40s+12 次）会导致 compose 判定 unhealthy 直接中止部署。
+      retries: 30
+      start_period: 120s
     # 资源上限：单容器失控时只影响自己，不会把 4G 小机器整机拖死
     mem_limit: 768m
     pids_limit: 2048
