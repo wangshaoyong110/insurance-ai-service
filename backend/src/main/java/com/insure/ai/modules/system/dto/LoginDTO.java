@@ -22,4 +22,10 @@ public class LoginDTO implements Serializable {
     @NotBlank(message = "请输入密码")
     @Size(min = 6, max = 32, message = "密码长度为 6-32 位")
     private String password;
+
+    /** 图形验证码 ID(GET /auth/captcha 或 /admin/auth/captcha 返回) */
+    private String captchaId;
+
+    /** 图形验证码字符 */
+    private String captchaCode;
 }

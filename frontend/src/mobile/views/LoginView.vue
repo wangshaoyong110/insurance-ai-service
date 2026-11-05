@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { onBeforeUnmount, reactive, ref } from 'vue';
+import { onBeforeUnmount, onMounted, reactive, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { cusRegisterApi, cusSendSmsCodeApi } from '@/api';
+import { cusCaptchaApi, cusRegisterApi, cusSendSmsCodeApi } from '@/api';
 import { useCusUserStore } from '@/mobile/stores/cusUser';
 
 /**
@@ -29,6 +29,17 @@ const registerForm = reactive({
   smsCode: '',
 });
 
+/** 图形验证码状态:登录与注册是两个独立场景,Redis 里互不通用 */
+interface CaptchaState {
+  captchaId: string;
+  image: string;
+  code: string;
+}
+
+const loginCaptcha = reactive<CaptchaState>({ captchaId: '', image: '', code: '' });
+const registerCaptcha = reactive<CaptchaState>({ captchaId: '', image: '', code: '' });
+const captchaLoading = reactive({ login: false, register: false });
+
 /** 验证码倒计时剩余秒数 */
 const smsCountdown = ref(0);
 /** 验证码发送中 */
@@ -36,8 +47,36 @@ const smsSending = ref(false);
 let smsTimer: ReturnType<typeof setInterval> | undefined;
 
 /**
+ * 拉取一张图形验证码
+ * <p>注册页发短信成功后不能刷新:服务端会把这张验证码标记为「已验证 + 绑定手机号」,
+ * 注册提交时要复核同一张,刷新后旧短信验证码就失去了配对关系。</p>
+ */
+async function refreshCaptcha(scene: 'login' | 'register'): Promise<void> {
+  if (captchaLoading[scene]) {
+    return;
+  }
+  captchaLoading[scene] = true;
+  try {
+    const result = await cusCaptchaApi(scene);
+    const target = scene === 'login' ? loginCaptcha : registerCaptcha;
+    target.captchaId = result.captchaId;
+    target.image = result.image ? `data:image/png;base64,${result.image}` : '';
+    target.code = '';
+  } catch {
+    // 错误提示已由响应拦截器统一处理,保留「点击获取」占位供用户重试
+  } finally {
+    captchaLoading[scene] = false;
+  }
+}
+
+onMounted(() => {
+  void refreshCaptcha('login');
+  void refreshCaptcha('register');
+});
+
+/**
  * 获取短信验证码
- * <p>60 秒倒计时内不可重复获取;演示环境验证码会直接回显在提示中</p>
+ * <p>必须先输入图形验证码并通过服务端校验,才会真正发短信;成功后保留同一张图形验证码</p>
  */
 async function handleSendSmsCode(): Promise<void> {
   if (smsCountdown.value > 0 || smsSending.value) {
@@ -47,9 +86,19 @@ async function handleSendSmsCode(): Promise<void> {
     ElMessage.warning('请先输入正确的手机号');
     return;
   }
+  if (!registerCaptcha.code.trim()) {
+    ElMessage.warning('请先输入图形验证码');
+    return;
+  }
   smsSending.value = true;
   try {
-    const result = await cusSendSmsCodeApi({ phone: registerForm.phone, scene: 'register' });
+    // 关键前置:服务端先校验图形验证码,通过后才会发短信
+    const result = await cusSendSmsCodeApi({
+      phone: registerForm.phone,
+      scene: 'register',
+      captchaId: registerCaptcha.captchaId,
+      captchaCode: registerCaptcha.code.trim(),
+    });
     smsCountdown.value = result.resendSeconds || 60;
     smsTimer = setInterval(() => {
       smsCountdown.value -= 1;
@@ -69,7 +118,8 @@ async function handleSendSmsCode(): Promise<void> {
       ElMessage.success(result.tip || '验证码已发送,请注意查收短信');
     }
   } catch {
-    // 错误提示已由请求拦截器统一处理
+    // 错误提示已由请求拦截器统一处理;图形验证码可能已被标记或消费,换一张重新校验
+    await refreshCaptcha('register');
   } finally {
     smsSending.value = false;
   }
@@ -93,14 +143,24 @@ async function handleLogin(): Promise<void> {
     ElMessage.warning('请输入密码');
     return;
   }
+  if (!loginCaptcha.code.trim()) {
+    ElMessage.warning('请输入图形验证码');
+    return;
+  }
   loading.value = true;
   try {
-    await cusUserStore.login({ account: loginForm.account.trim(), password: loginForm.password });
+    await cusUserStore.login({
+      account: loginForm.account.trim(),
+      password: loginForm.password,
+      captchaId: loginCaptcha.captchaId,
+      captchaCode: loginCaptcha.code.trim(),
+    });
     ElMessage.success('登录成功');
     const redirect = (route.query.redirect as string | undefined) ?? '/chat';
     await router.replace(redirect);
   } catch {
-    // 错误提示已由请求拦截器统一处理
+    // 错误提示已由请求拦截器统一处理;登录验证码一次性消费,失败后换一张
+    await refreshCaptcha('login');
   } finally {
     loading.value = false;
   }
@@ -126,6 +186,10 @@ async function handleRegister(): Promise<void> {
     ElMessage.warning('请输入 6 位短信验证码');
     return;
   }
+  if (!registerCaptcha.code.trim()) {
+    ElMessage.warning('请输入图形验证码');
+    return;
+  }
   if (!agreed.value) {
     ElMessage.warning('请先阅读并同意隐私说明');
     return;
@@ -138,16 +202,35 @@ async function handleRegister(): Promise<void> {
       confirmPassword: registerForm.confirmPassword,
       nickname: registerForm.nickname || undefined,
       smsCode: registerForm.smsCode,
+      // 与发短信时用的是同一张图形验证码,服务端复核已验证状态与手机号绑定
+      captchaId: registerCaptcha.captchaId,
+      captchaCode: registerCaptcha.code.trim(),
     });
     ElMessage.success('注册成功,请登录');
     loginForm.account = registerForm.phone;
     loginForm.password = registerForm.password;
     activeTab.value = 'login';
+    // 注册验证码已消费,登录也需要一张新的
+    await refreshCaptcha('login');
+    await refreshCaptcha('register');
   } catch {
-    // 错误提示已统一处理
+    // 错误提示已统一处理;图形验证码可能已被消费,换一张重走校验
+    await refreshCaptcha('register');
   } finally {
     loading.value = false;
   }
+}
+
+/**
+ * 点击注册页的图形验证码图片
+ * <p>短信已发出后这张图已被服务端标记并绑定手机号,刷新会让注册提交失去配对</p>
+ */
+async function handleRegisterCaptchaClick(): Promise<void> {
+  if (smsCountdown.value > 0) {
+    ElMessage.info('短信已发送,提交注册前请保持当前图形验证码不变');
+    return;
+  }
+  await refreshCaptcha('register');
 }
 
 /**
@@ -212,6 +295,21 @@ function switchTab(tab: 'login' | 'register'): void {
             @keyup.enter="handleLogin"
           />
         </label>
+        <div class="field field--captcha">
+          <el-icon><Picture /></el-icon>
+          <input
+            v-model="loginCaptcha.code"
+            type="text"
+            maxlength="6"
+            placeholder="图形验证码"
+            autocomplete="off"
+            @keyup.enter="handleLogin"
+          />
+          <button type="button" class="captcha-img" title="点击刷新验证码" @click="refreshCaptcha('login')">
+            <img v-if="loginCaptcha.image" :src="loginCaptcha.image" alt="图形验证码" />
+            <span v-else>点击获取</span>
+          </button>
+        </div>
         <button type="button" class="primary-btn" :disabled="loading" @click="handleLogin">
           {{ loading ? '登录中...' : '登录' }}
         </button>
@@ -224,6 +322,26 @@ function switchTab(tab: 'login' | 'register'): void {
           <el-icon><Iphone /></el-icon>
           <input v-model="registerForm.phone" type="tel" maxlength="11" placeholder="手机号(用于登录)" />
         </label>
+        <div class="field field--captcha">
+          <el-icon><Picture /></el-icon>
+          <input
+            v-model="registerCaptcha.code"
+            type="text"
+            maxlength="6"
+            placeholder="图形验证码"
+            autocomplete="off"
+          />
+          <button
+            type="button"
+            class="captcha-img"
+            :class="{ 'is-locked': smsCountdown > 0 }"
+            :title="smsCountdown > 0 ? '短信已发送,提交注册前请勿刷新' : '点击刷新验证码'"
+            @click="handleRegisterCaptchaClick"
+          >
+            <img v-if="registerCaptcha.image" :src="registerCaptcha.image" alt="图形验证码" />
+            <span v-else>点击获取</span>
+          </button>
+        </div>
         <label class="field field--sms">
           <el-icon><ChatDotRound /></el-icon>
           <input
@@ -242,6 +360,9 @@ function switchTab(tab: 'login' | 'register'): void {
             {{ smsCountdown > 0 ? `${smsCountdown}s 后重发` : smsSending ? '发送中...' : '获取验证码' }}
           </button>
         </label>
+        <p v-if="smsCountdown > 0" class="captcha-tip">
+          图形验证码已通过校验,注册提交时会复核同一张,请勿修改或刷新
+        </p>
         <label class="field">
           <el-icon><Avatar /></el-icon>
           <input v-model="registerForm.nickname" type="text" maxlength="20" placeholder="昵称(选填)" />
@@ -419,6 +540,42 @@ function switchTab(tab: 'login' | 'register'): void {
   &--sms {
     padding-right: 8px;
   }
+}
+
+.captcha-img {
+  flex-shrink: 0;
+  width: 100px;
+  height: 34px;
+  padding: 0;
+  overflow: hidden;
+  border: none;
+  border-radius: 8px;
+  background: #eaf0f8;
+  cursor: pointer;
+
+  &.is-locked {
+    cursor: not-allowed;
+    opacity: 0.85;
+  }
+
+  img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+
+  span {
+    font-size: 12px;
+    color: $color-text-secondary;
+  }
+}
+
+.captcha-tip {
+  margin-top: -4px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #e08a1e;
 }
 
 .sms-btn {

@@ -5,11 +5,13 @@ import com.insure.ai.common.BusinessException;
 import com.insure.ai.common.Result;
 import com.insure.ai.common.ResultCode;
 import com.insure.ai.common.annotation.RateLimit;
+import com.insure.ai.common.enums.CaptchaSceneEnum;
 import com.insure.ai.common.enums.SmsSceneEnum;
 import com.insure.ai.common.util.ClientIpUtils;
 import com.insure.ai.common.util.SecurityUtils;
 import com.insure.ai.config.SecurityProperties;
 import com.insure.ai.modules.system.dto.ChangePasswordDTO;
+import com.insure.ai.modules.system.dto.CaptchaVO;
 import com.insure.ai.modules.system.dto.CusUserVO;
 import com.insure.ai.modules.system.dto.LoginDTO;
 import com.insure.ai.modules.system.dto.LoginVO;
@@ -17,6 +19,7 @@ import com.insure.ai.modules.system.dto.RegisterDTO;
 import com.insure.ai.modules.system.dto.SmsCodeVO;
 import com.insure.ai.modules.system.dto.SmsSendDTO;
 import com.insure.ai.modules.system.service.CusAuthService;
+import com.insure.ai.modules.system.service.CaptchaService;
 import com.insure.ai.modules.system.service.SmsService;
 import com.insure.ai.security.JwtUtils;
 import io.swagger.v3.oas.annotations.security.SecurityRequirements;
@@ -46,11 +49,26 @@ public class AuthController {
 
     private final CusAuthService cusAuthService;
     private final SmsService smsService;
+    private final CaptchaService captchaService;
     private final JwtUtils jwtUtils;
     private final SecurityProperties securityProperties;
 
     /**
-     * 客户登录(手机号或账号 + 密码)
+     * 获取图形验证码
+     * <p>{@code scene=login} 用于登录,{@code scene=register} 用于注册;
+     * 两个场景的验证码互不通用,且都只能使用一次。</p>
+     */
+    @RateLimit(limit = 20, seconds = 60, message = "获取验证码过于频繁,请稍后再试")
+    @SecurityRequirements
+    @GetMapping("/captcha")
+    public Result<CaptchaVO> captcha(@RequestParam(defaultValue = "login") String scene) {
+        CaptchaSceneEnum target = CaptchaSceneEnum.parse(scene)
+                .orElseThrow(() -> new BusinessException(ResultCode.CAPTCHA_SCENE_ERROR));
+        return Result.success(captchaService.generate(target));
+    }
+
+    /**
+     * 客户登录(手机号或账号 + 密码 + 图形验证码)
      */
     @Log(module = "客户端-认证", operation = "客户登录")
     @SecurityRequirements
@@ -62,8 +80,9 @@ public class AuthController {
     /**
      * 获取短信验证码
      * <p>注册前必须先获取;验证码 5 分钟有效,同一手机号 60 秒内不可重复获取。
-     * 防刷由三道组成:本接口的 IP 限流注解 → 服务层的场景白名单/已注册手机号/
-     * 同 IP 与全站发送量上限 → 手机号重发间隔与日上限。</p>
+     * 防刷由四道组成:本接口的 IP 限流注解 → <b>图形验证码校验</b> → 服务层的
+     * 场景白名单/已注册手机号/同 IP 与全站发送量上限 → 手机号重发间隔与日上限。
+     * 图形验证码不通过时不会进入任何短信风控,更不会调用发送通道。</p>
      */
     @Log(module = "客户端-认证", operation = "获取短信验证码")
     @RateLimit(limit = 5, seconds = 60, message = "获取验证码过于频繁,请稍后再试")
@@ -73,6 +92,8 @@ public class AuthController {
         // 严格解析场景:非法值直接拒绝,不再静默回落到注册场景
         SmsSceneEnum scene = SmsSceneEnum.parse(dto.getScene())
                 .orElseThrow(() -> new BusinessException(ResultCode.SMS_SCENE_NOT_ALLOWED));
+        // 注册链路的硬性前置:先验证图形验证码无误,才允许走短信风控与发送
+        captchaService.verifyForSms(dto.getCaptchaId(), dto.getCaptchaCode(), dto.getPhone());
         String clientIp = ClientIpUtils.resolve(request, securityProperties.getTrustedProxies());
         return Result.success("验证码已发送", smsService.sendVerifyCode(dto.getPhone(), scene, clientIp));
     }

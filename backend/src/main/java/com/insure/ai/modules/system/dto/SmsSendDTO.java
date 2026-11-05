@@ -26,4 +26,12 @@ public class SmsSendDTO implements Serializable {
     @Schema(description = "使用场景:register 注册、login 登录、reset 重置密码", example = "register")
     @Pattern(regexp = "^register$|^login$|^reset$", message = "短信场景不正确")
     private String scene = "register";
+
+    /** 图形验证码 ID:必须先在注册场景校验通过,才允许发短信 */
+    @Schema(description = "图形验证码 ID(注册页获取)", example = "c8f4e6b21a9d4e0c")
+    private String captchaId;
+
+    /** 图形验证码字符 */
+    @Schema(description = "图形验证码字符", example = "7K3M")
+    private String captchaCode;
 }

@@ -10,8 +10,8 @@
 
 | 分组 | JSON 地址 | 覆盖范围 |
 | --- | --- | --- |
-| 管理端接口 | `/api/v3/api-docs/admin-api` | `/admin/**`（47 个接口 / 10 个分组） |
-| 客户端(手机 H5)接口 | `/api/v3/api-docs/client-api` | `/auth/**`、`/chat/**`、`/file/**`（16 个接口 / 3 个分组） |
+| 管理端接口 | `/api/v3/api-docs/admin-api` | `/admin/**`（按 OpenAPI paths 实测 51 个 / 13 个分组） |
+| 客户端(手机 H5)接口 | `/api/v3/api-docs/client-api` | `/auth/**`、`/chat/**`、`/service/**`、`/file/**`（实测 21 个 / 4 个分组） |
 
 调试步骤：先调 `/admin/auth/login` 或 `/auth/login` 取 `data.token` → 点 UI 右上角 **Authorize** 填入 token（无需手写 `Bearer ` 前缀）→ 再调其他接口。
 
@@ -65,18 +65,32 @@
 
 | 方法 | 路径 | 说明 | 参数 |
 | --- | --- | --- | --- |
-| POST | `/auth/login` | 客户登录 | body: `{ account, password }`，`account` 为手机号或账号 |
-| POST | `/auth/sms-code` | 获取短信验证码 | body: `{ phone, scene }`，**当前仅开放 `register`**；60 秒内重发返回 `4003` |
-| POST | `/auth/register` | 客户注册（手机号唯一） | body: `{ phone, password, confirmPassword, smsCode, nickname?, realName?, email? }` |
+| GET | `/auth/captcha` | 获取图形验证码 | query: `scene=login\|register`，返回 `{ captchaId, image, expireSeconds, debugCode }` |
+| POST | `/auth/login` | 客户登录 | body: `{ account, password, captchaId, captchaCode }`，`account` 为手机号或账号 |
+| POST | `/auth/sms-code` | 获取短信验证码 | body: `{ phone, scene, captchaId, captchaCode }`，**必须先通过图形验证码校验**；当前仅开放 `register`；60 秒内重发返回 `4003` |
+| POST | `/auth/register` | 客户注册（手机号唯一） | body: `{ phone, password, confirmPassword, smsCode, captchaId, captchaCode, nickname?, realName?, email? }`，`captchaId` 必须是发短信时用的同一张 |
 | POST | `/auth/logout` | 退出登录 | header: token |
 | GET | `/auth/me` | 当前客户信息 | - |
 | PUT | `/auth/password` | 修改密码 | body: `{ oldPassword, newPassword, confirmPassword }` |
 | PUT | `/auth/profile` | 修改资料 | query: `nickname?`, `email?` |
 
+**图形验证码规则**（登录、注册、发短信都要带 `captchaId` + `captchaCode`）：
+
+| 规则 | 说明 |
+| --- | --- |
+| 场景隔离 | `login` 与 `register` 两张验证码互不通用；管理端用 `GET /admin/auth/captcha` 固定取 `login` 场景 |
+| 存储 | 答案以国密 SM3 摘要存 Redis,不存明文;5 分钟有效,连错 3 次作废,登录 / 注册提交成功后立即删除 |
+| 注册硬性顺序 | `/auth/sms-code` **先校验图形验证码**再进入短信风控与发送;通过后验证码标记「已验证 + 绑定手机号」,`/auth/register` 复核同一张并消费 |
+| 一张换一次 | 已验证的验证码不能换手机号再次发短信;前端在短信发出后锁定验证码图片 |
+| 演示模式 | `insure.captcha.debug=true` 时 `debugCode` 回显明文;生产必须置 false,`insure.captcha.enabled` 保持 true |
+
+图形验证码错误码：`4011` 未填写、`4012` 不正确、`4013` 已失效或已使用、`4014` 场景非法、`4015` 注册未先完成图形校验并发短信、`4016` 图形验证码与手机号不匹配。
+
 **`/auth/sms-code` 防刷规则**（发送前依次校验，任一不过都不生成验证码、不调用发送通道）：
 
 | 维度 | 阈值 | 返回码 |
 | --- | --- | --- |
+| **图形验证码前置** | 校验不通过则不进入任何短信逻辑 | `4011` / `4012` / `4013` |
 | 接口层同 IP | 5 次 / 60 秒 | `429` |
 | 场景白名单 | 仅 `register`；非法值参数校验拦截，`login`/`reset` 返回 `4008` | `4008` |
 | 已注册手机号 | 注册场景直接拒绝 | `4010` |
@@ -106,7 +120,8 @@
 
 | 方法 | 路径 | 说明 | 参数 |
 | --- | --- | --- | --- |
-| POST | `/admin/auth/login` | 管理员登录（校验角色启用状态） | body: `{ account, password }` |
+| GET | `/admin/auth/captcha` | 获取管理端登录图形验证码 | 返回 `{ captchaId, image, expireSeconds, debugCode }` |
+| POST | `/admin/auth/login` | 管理员登录（校验角色启用状态） | body: `{ account, password, captchaId, captchaCode }` |
 | POST | `/admin/auth/logout` | 退出登录 | header: token |
 | GET | `/admin/auth/me` | 当前管理员信息（含 `roleName`、`roleCode`） | - |
 | GET | `/admin/auth/menus` | 当前角色可见的菜单树 | - |
@@ -460,9 +475,13 @@ AI 答得好不好、答不了怎么办，这两件事都要有出口。
 
 ```bash
 # ---------- 管理端 ----------
+# 先取图形验证码(演示模式 debugCode 会回显验证码明文)
+CAPTCHA=$(curl -s 'http://localhost:8080/api/admin/auth/captcha')
+CAPTCHA_ID=$(echo "$CAPTCHA" | jq -r '.data.captchaId')
+CAPTCHA_CODE=$(echo "$CAPTCHA" | jq -r '.data.debugCode')
 ADMIN_TOKEN=$(curl -s -X POST http://localhost:8080/api/admin/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"account":"admin","password":"123456"}' | jq -r '.data.token')
+  -d "{\"account\":\"admin\",\"password\":\"123456\",\"captchaId\":\"$CAPTCHA_ID\",\"captchaCode\":\"$CAPTCHA_CODE\"}" | jq -r '.data.token')
 
 # 当前管理员
 curl -s http://localhost:8080/api/admin/auth/me -H "Authorization: Bearer $ADMIN_TOKEN"
@@ -476,9 +495,12 @@ curl -s -X POST http://localhost:8080/api/admin/role \
   -d '{"roleCode":"AUDITOR","roleName":"审计员","sort":3,"status":1,"menuIds":[1,40,41]}'
 
 # ---------- 客户端 ----------
+CUS_CAPTCHA=$(curl -s 'http://localhost:8080/api/auth/captcha?scene=login')
+CUS_CAPTCHA_ID=$(echo "$CUS_CAPTCHA" | jq -r '.data.captchaId')
+CUS_CAPTCHA_CODE=$(echo "$CUS_CAPTCHA" | jq -r '.data.debugCode')
 CUS_TOKEN=$(curl -s -X POST http://localhost:8080/api/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"account":"13900000001","password":"123456"}' | jq -r '.data.token')
+  -d "{\"account\":\"13900000001\",\"password\":\"123456\",\"captchaId\":\"$CUS_CAPTCHA_ID\",\"captchaCode\":\"$CUS_CAPTCHA_CODE\"}" | jq -r '.data.token')
 
 # 提问
 curl -s -X POST http://localhost:8080/api/chat/send \

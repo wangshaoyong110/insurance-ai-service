@@ -87,7 +87,13 @@ public enum ResultCode {
     SMS_CODE_EXPIRED(4007, "短信验证码已失效,请重新获取"),
     SMS_SCENE_NOT_ALLOWED(4008, "短信场景不合法或暂未开放"),
     SMS_RISK_REJECTED(4009, "请求过于频繁,请稍后再试"),
-    SMS_PHONE_REGISTERED(4010, "该手机号已注册,请直接登录");
+    SMS_PHONE_REGISTERED(4010, "该手机号已注册,请直接登录"),
+    CAPTCHA_REQUIRED(4011, "请输入图形验证码"),
+    CAPTCHA_ERROR(4012, "图形验证码不正确"),
+    CAPTCHA_EXPIRED(4013, "图形验证码已失效,请点击图片刷新"),
+    CAPTCHA_SCENE_ERROR(4014, "图形验证码场景不正确"),
+    CAPTCHA_NOT_VERIFIED(4015, "请先完成图形验证码校验并获取短信验证码"),
+    CAPTCHA_PHONE_MISMATCH(4016, "图形验证码与手机号不匹配,请重新获取");
 
     /** 状态码 */
     private final Integer code;

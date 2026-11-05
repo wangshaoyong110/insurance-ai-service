@@ -2,13 +2,17 @@ package com.insure.ai.modules.system.controller;
 
 import com.insure.ai.aspect.Log;
 import com.insure.ai.common.Result;
+import com.insure.ai.common.annotation.RateLimit;
+import com.insure.ai.common.enums.CaptchaSceneEnum;
 import com.insure.ai.common.util.SecurityUtils;
 import com.insure.ai.modules.system.dto.ChangePasswordDTO;
+import com.insure.ai.modules.system.dto.CaptchaVO;
 import com.insure.ai.modules.system.dto.LoginDTO;
 import com.insure.ai.modules.system.dto.LoginVO;
 import com.insure.ai.modules.system.dto.UserVO;
 import com.insure.ai.modules.system.entity.SysMenu;
 import com.insure.ai.modules.system.service.AdminAuthService;
+import com.insure.ai.modules.system.service.CaptchaService;
 import com.insure.ai.modules.system.service.MenuService;
 import com.insure.ai.security.JwtUtils;
 import io.swagger.v3.oas.annotations.security.SecurityRequirements;
@@ -38,11 +42,22 @@ import java.util.List;
 public class AdminAuthController {
 
     private final AdminAuthService adminAuthService;
+    private final CaptchaService captchaService;
     private final MenuService menuService;
     private final JwtUtils jwtUtils;
 
     /**
-     * 管理端登录(账号或手机号 + 密码)
+     * 获取管理端登录图形验证码(场景固定为 login)
+     */
+    @RateLimit(limit = 20, seconds = 60, message = "获取验证码过于频繁,请稍后再试")
+    @SecurityRequirements
+    @GetMapping("/captcha")
+    public Result<CaptchaVO> captcha() {
+        return Result.success(captchaService.generate(CaptchaSceneEnum.LOGIN));
+    }
+
+    /**
+     * 管理端登录(账号或手机号 + 密码 + 图形验证码)
      */
     @Log(module = "管理端-认证", operation = "管理员登录")
     @SecurityRequirements

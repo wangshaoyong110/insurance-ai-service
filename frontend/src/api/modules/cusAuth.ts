@@ -1,5 +1,6 @@
 import { cusGet, cusPost, cusPut } from '@/utils/cusRequest';
 import type {
+  CaptchaResult,
   ChangePasswordParams,
   CusLoginResult,
   LoginParams,
@@ -14,7 +15,12 @@ import type { CusUserInfo } from '@/types';
  * 使用独立的 axios 实例与 token,与后台管理端隔离
  */
 
-/** 客户登录(手机号 / 账号 + 密码) */
+/** 获取图形验证码(登录 / 注册场景各一张) */
+export function cusCaptchaApi(scene: 'login' | 'register'): Promise<CaptchaResult> {
+  return cusGet<CaptchaResult>('/auth/captcha', { scene });
+}
+
+/** 客户登录(手机号 / 账号 + 密码 + 图形验证码) */
 export function cusLoginApi(data: LoginParams): Promise<CusLoginResult> {
   return cusPost<CusLoginResult>('/auth/login', data);
 }

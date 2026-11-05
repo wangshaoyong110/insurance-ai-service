@@ -2,6 +2,7 @@ package com.insure.ai.modules.system.service.impl;
 
 import com.insure.ai.modules.system.service.SysLoginLogService;
 import com.insure.ai.modules.system.service.AdminAuthService;
+import com.insure.ai.modules.system.service.CaptchaService;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.insure.ai.common.BusinessException;
 import com.insure.ai.common.Constants;
@@ -54,6 +55,7 @@ public class AdminAuthServiceImpl implements AdminAuthService {
     private final JwtUtils jwtUtils;
     private final TokenService tokenService;
     private final LoginAttemptService loginAttemptService;
+    private final CaptchaService captchaService;
 
     /**
      * 管理端登录:支持账号或手机号
@@ -65,6 +67,8 @@ public class AdminAuthServiceImpl implements AdminAuthService {
     @Transactional(rollbackFor = Exception.class)
     @Override
     public LoginVO<UserVO> login(LoginDTO dto, HttpServletRequest request) {
+        // 图形验证码先校验且不增加登录失败计数:否则可用错误验证码把他人账号锁死
+        captchaService.verifyForLogin(dto.getCaptchaId(), dto.getCaptchaCode());
         String account = dto.getAccount().trim();
         loginAttemptService.checkLimit(LOGIN_SCOPE, account);
         SysUser user = sysUserMapper.selectOne(Wrappers.<SysUser>lambdaQuery()

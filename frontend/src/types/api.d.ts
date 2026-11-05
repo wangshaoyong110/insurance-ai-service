@@ -20,9 +20,24 @@ export interface ApiResult<T> {
 }
 
 /** 登录参数(账号或手机号 + 密码),两端共用 */
+/** 登录参数(管理端 / 客户端共用) */
 export interface LoginParams {
   account: string;
   password: string;
+  /** 图形验证码 ID */
+  captchaId: string;
+  /** 图形验证码字符 */
+  captchaCode: string;
+}
+
+/** 图形验证码 */
+export interface CaptchaResult {
+  captchaId: string;
+  /** PNG Base64,不含 data: 前缀 */
+  image: string;
+  expireSeconds: number;
+  /** 演示环境回显的验证码明文,生产恒为空 */
+  debugCode?: string;
 }
 
 /** 管理端登录返回 */
@@ -52,6 +67,10 @@ export interface RegisterParams {
   email?: string;
   /** 短信验证码(注册场景) */
   smsCode?: string;
+  /** 图形验证码 ID:与获取短信验证码时用的是同一张 */
+  captchaId: string;
+  /** 图形验证码字符 */
+  captchaCode: string;
 }
 
 /** 短信验证码发送参数 */
@@ -59,6 +78,10 @@ export interface SmsSendParams {
   phone: string;
   /** 使用场景:register / login / reset */
   scene: string;
+  /** 图形验证码 ID,校验通过后才发短信 */
+  captchaId: string;
+  /** 图形验证码字符 */
+  captchaCode: string;
 }
 
 /** 短信验证码发送结果 */

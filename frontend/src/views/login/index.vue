@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { reactive, ref } from 'vue';
+import { onMounted, reactive, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import type { FormRules } from 'element-plus';
+import { adminCaptchaApi } from '@/api';
 import { useUserStore } from '@/stores/user';
 import { useMenuStore } from '@/stores/menu';
 
@@ -19,7 +20,12 @@ const loading = ref(false);
 const form = reactive({
   account: '',
   password: '',
+  captchaCode: '',
 });
+/** 图形验证码:登录失败后必须刷新,服务端每张只消费一次 */
+const captchaId = ref('');
+const captchaImage = ref('');
+const captchaLoading = ref(false);
 
 const rules: FormRules = {
   account: [{ required: true, message: '请输入账号或手机号', trigger: 'blur' }],
@@ -27,7 +33,28 @@ const rules: FormRules = {
     { required: true, message: '请输入密码', trigger: 'blur' },
     { min: 6, max: 32, message: '密码长度为 6-32 位', trigger: 'blur' },
   ],
+  captchaCode: [{ required: true, message: '请输入图形验证码', trigger: 'blur' }],
 };
+
+/** 拉取一张新的图形验证码 */
+async function refreshCaptcha(): Promise<void> {
+  if (captchaLoading.value) {
+    return;
+  }
+  captchaLoading.value = true;
+  try {
+    const result = await adminCaptchaApi();
+    captchaId.value = result.captchaId;
+    captchaImage.value = result.image ? `data:image/png;base64,${result.image}` : '';
+    form.captchaCode = '';
+  } catch {
+    // 错误提示已由响应拦截器统一处理,保留「点击获取」占位供用户重试
+  } finally {
+    captchaLoading.value = false;
+  }
+}
+
+onMounted(refreshCaptcha);
 
 /**
  * 提交登录
@@ -44,12 +71,18 @@ async function handleLogin(): Promise<void> {
   try {
     // 切换账号前清理上一位管理员注册的动态路由与菜单
     menuStore.reset(router);
-    await userStore.login({ account: form.account.trim(), password: form.password });
+    await userStore.login({
+      account: form.account.trim(),
+      password: form.password,
+      captchaId: captchaId.value,
+      captchaCode: form.captchaCode.trim(),
+    });
     const redirect = (route.query.redirect as string | undefined) ?? '/';
     await router.replace(redirect);
     ElMessage.success('登录成功');
   } catch {
-    // 错误提示已在响应拦截器统一处理
+    // 错误提示已在响应拦截器统一处理;验证码是一次性的,失败后必须换新图
+    await refreshCaptcha();
   } finally {
     loading.value = false;
   }
@@ -106,6 +139,25 @@ function openCustomerSite(): void {
                 <el-icon><Lock /></el-icon>
               </template>
             </el-input>
+          </el-form-item>
+          <el-form-item prop="captchaCode">
+            <div class="captcha-row">
+              <el-input
+                v-model="form.captchaCode"
+                placeholder="图形验证码"
+                maxlength="6"
+                clearable
+                @keyup.enter="handleLogin"
+              >
+                <template #prefix>
+                  <el-icon><Picture /></el-icon>
+                </template>
+              </el-input>
+              <button type="button" class="captcha-img" title="点击刷新验证码" @click="refreshCaptcha">
+                <img v-if="captchaImage" :src="captchaImage" alt="图形验证码" />
+                <span v-else>点击获取</span>
+              </button>
+            </div>
           </el-form-item>
           <el-button type="primary" class="login-btn" :loading="loading" @click="handleLogin">
             登录后台
@@ -228,6 +280,37 @@ function openCustomerSite(): void {
       p {
         margin-top: 8px;
         font-size: 13px;
+        color: $color-text-secondary;
+      }
+    }
+
+    .captcha-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      width: 100%;
+    }
+
+    .captcha-img {
+      flex-shrink: 0;
+      width: 120px;
+      height: 40px;
+      padding: 0;
+      overflow: hidden;
+      border: 1px solid $color-border-light;
+      border-radius: 6px;
+      background: #f5f8fd;
+      cursor: pointer;
+
+      img {
+        display: block;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+      }
+
+      span {
+        font-size: 12px;
         color: $color-text-secondary;
       }
     }

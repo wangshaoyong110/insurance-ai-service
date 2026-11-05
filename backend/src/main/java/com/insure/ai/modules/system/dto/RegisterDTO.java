@@ -46,6 +46,12 @@ public class RegisterDTO implements Serializable {
     @Size(max = 10, message = "验证码格式不正确")
     private String smsCode;
 
+    /** 图形验证码 ID:与获取短信验证码时使用的是同一张,注册提交时复核并消费 */
+    private String captchaId;
+
+    /** 图形验证码字符 */
+    private String captchaCode;
+
     /** 电子邮箱 */
     @Email(message = "邮箱格式不正确")
     private String email;

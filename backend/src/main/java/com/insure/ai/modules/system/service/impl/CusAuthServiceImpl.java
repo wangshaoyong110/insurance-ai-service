@@ -14,6 +14,7 @@ import com.insure.ai.modules.system.dto.LoginDTO;
 import com.insure.ai.modules.system.dto.LoginVO;
 import com.insure.ai.modules.system.dto.RegisterDTO;
 import com.insure.ai.modules.system.service.SmsService;
+import com.insure.ai.modules.system.service.CaptchaService;
 import com.insure.ai.modules.system.entity.CusUser;
 import com.insure.ai.modules.system.mapper.CusUserMapper;
 import com.insure.ai.security.JwtUtils;
@@ -56,6 +57,7 @@ public class CusAuthServiceImpl implements CusAuthService {
     private final TokenService tokenService;
     private final LoginAttemptService loginAttemptService;
     private final SmsService smsService;
+    private final CaptchaService captchaService;
 
     /**
      * 客户端登录:支持手机号或账号
@@ -67,6 +69,8 @@ public class CusAuthServiceImpl implements CusAuthService {
     @Transactional(rollbackFor = Exception.class)
     @Override
     public LoginVO<CusUserVO> login(LoginDTO dto, HttpServletRequest request) {
+        // 图形验证码先校验且不增加登录失败计数:否则可用错误验证码把他人账号锁死
+        captchaService.verifyForLogin(dto.getCaptchaId(), dto.getCaptchaCode());
         String account = dto.getAccount().trim();
         loginAttemptService.checkLimit(LOGIN_SCOPE, account);
         CusUser user = cusUserMapper.selectOne(Wrappers.<CusUser>lambdaQuery()
@@ -116,6 +120,9 @@ public class CusAuthServiceImpl implements CusAuthService {
             throw new BusinessException(ResultCode.PARAM_ERROR.getCode(), "两次输入的密码不一致");
         }
         String phone = dto.getPhone().trim();
+        // 复核发短信时用过的同一张图形验证码:要求已验证且与手机号绑定,随后一次性消费
+        captchaService.verifyForRegister(dto.getCaptchaId(), dto.getCaptchaCode(), phone,
+                smsService.isRegisterVerifyRequired());
         // 注册必须先通过短信验证码校验(可通过 insure.sms.verify-register 关闭,仅限本地联调)
         if (smsService.isRegisterVerifyRequired()) {
             smsService.verifyCode(phone, dto.getSmsCode(), SmsSceneEnum.REGISTER);

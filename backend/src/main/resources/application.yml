@@ -102,6 +102,18 @@ insure:
     # 短信签名与模板编号(接入运营商后使用)
     sign-name: 安鑫保险
     template-code: SMS_000000
+  # ---------------- 图形验证码 ----------------
+  # 登录、注册提交、发短信前都要校验;答案以国密 SM3 摘要存 Redis,5 分钟有效
+  captcha:
+    # 总开关:仅限本地联调可临时置 false,生产必须为 true
+    enabled: ${INSURE_CAPTCHA_ENABLED:true}
+    # 演示模式会回显验证码明文,便于自动化联调;生产必须置 false
+    debug: ${INSURE_CAPTCHA_DEBUG:true}
+    expire-seconds: 300
+    length: 4
+    max-verify-attempts: 3
+    width: 120
+    height: 40
   upload:
     # 本地存储根目录(Windows 示例:D:/insurance-upload/,Linux 示例:/data/upload/)
     path: ./upload/
@@ -121,6 +133,7 @@ insure:
       - /auth/captcha
       # 管理端(业务操作人员)登录入口,与客户端完全独立
       - /admin/auth/login
+      - /admin/auth/captcha
       - /upload/**
       - /error
       # 接口文档(Swagger UI + OpenAPI JSON),内网交付时可通过 springdoc.api-docs.enabled=false 关闭

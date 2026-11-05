@@ -1,11 +1,16 @@
 import { get, post, put } from '@/utils/request';
-import type { AdminLoginResult, ChangePasswordParams, LoginParams } from '@/types/api';
+import type { AdminLoginResult, CaptchaResult, ChangePasswordParams, LoginParams } from '@/types/api';
 import type { AdminUserInfo, MenuItem } from '@/types';
 
 /**
  * 管理端认证接口(业务操作人员)
  * 与客户端认证接口 /auth/* 完全独立
  */
+
+/** 获取管理端登录图形验证码 */
+export function adminCaptchaApi(): Promise<CaptchaResult> {
+  return get<CaptchaResult>('/admin/auth/captcha');
+}
 
 /** 管理端登录 */
 export function adminLoginApi(data: LoginParams): Promise<AdminLoginResult> {
