@@ -182,16 +182,18 @@ public class ChatService {
         // 3. 知识库召回 + 组装上下文
         KbQuestionService.RecallResult recall = kbQuestionService.recallWithScore(content, RECALL_LIMIT);
         List<KbQuestion> references = recall.items();
-        recordGapIfWeak(cusUserId, session.getId(), content, recall.bestScore());
         // 4. 调用大模型(带保单/理赔查询工具)
         AiModelConfig config = aiModelFactory.defaultConfig();
-        ChatResponse response = callModel(config, cusUserId, session.getId(), references);
+        InsuranceQueryTools tools = new InsuranceQueryTools(policyService, cusUserId);
+        ChatResponse response = callModel(config, tools, cusUserId, session.getId(), references);
         String answer = extractText(response);
         // 5. AI 回复落库并更新会话摘要
         ChatMessage assistantMessage = saveMessage(session.getId(), cusUserId, ChatRoleEnum.ASSISTANT,
                 answer, resolveModelName(response, config), extractTokens(response));
         updateSessionSummary(session, content, answer);
-        // 6. 知识库命中次数 +1
+        // 6. 只有"该查知识库却没查到"才算盲区；走工具拿到真实业务数据的提问不算
+        recordGapIfWeak(cusUserId, session.getId(), content, recall.bestScore(), tools.isInvoked());
+        // 7. 知识库命中次数 +1
         references.forEach(item -> kbQuestionService.increaseHitCount(item.getId()));
 
         ChatAnswerVO result = new ChatAnswerVO();
@@ -218,13 +220,15 @@ public class ChatService {
         saveMessage(session.getId(), cusUserId, ChatRoleEnum.USER, content, null, 0);
         KbQuestionService.RecallResult recall = kbQuestionService.recallWithScore(content, RECALL_LIMIT);
         List<KbQuestion> references = recall.items();
-        recordGapIfWeak(cusUserId, session.getId(), content, recall.bestScore());
         AiModelConfig config = aiModelFactory.defaultConfig();
+        // 工具实例要贯穿整轮对话：结束后用它判断本轮是否查过业务数据，再决定要不要记知识盲区
+        InsuranceQueryTools tools = new InsuranceQueryTools(policyService, cusUserId);
 
         SseEmitter emitter = new SseEmitter(STREAM_TIMEOUT_MS);
         emitter.onTimeout(() -> log.warn("[智能客服] 流式连接超时 sessionId={}", session.getId()));
         emitter.onError(e -> log.warn("[智能客服] 流式连接异常 sessionId={} 原因={}", session.getId(), e.getMessage()));
-        chatExecutor.execute(() -> streamToEmitter(emitter, config, cusUserId, session, content, references));
+        chatExecutor.execute(() -> streamToEmitter(emitter, config, cusUserId, session, content, references,
+                tools, recall.bestScore()));
         return emitter;
     }
 
@@ -232,7 +236,8 @@ public class ChatService {
      * 真正执行流式调用并把增量推给客户端
      */
     private void streamToEmitter(SseEmitter emitter, AiModelConfig config, Long cusUserId,
-                                 ChatSession session, String content, List<KbQuestion> references) {
+                                 ChatSession session, String content, List<KbQuestion> references,
+                                 InsuranceQueryTools tools, int bestScore) {
         long start = System.currentTimeMillis();
         StringBuilder buffer = new StringBuilder();
         String[] modelName = {config.getModel()};
@@ -252,7 +257,7 @@ public class ChatService {
             // toIterable 会阻塞到上游结束，正好符合"异步线程里同步消费"的用法，且能同时拿到正文与用量
             Iterable<ChatResponse> responses = chatClient.prompt()
                     .messages(buildMessages(session.getId(), references))
-                    .tools(new InsuranceQueryTools(policyService, cusUserId))
+                    .tools(tools)
                     .stream()
                     .chatResponse()
                     .toIterable();
@@ -292,6 +297,8 @@ public class ChatService {
             ChatMessage assistantMessage = saveMessage(session.getId(), cusUserId, ChatRoleEnum.ASSISTANT,
                     answer, modelName[0], totalTokens[0]);
             updateSessionSummary(session, content, answer);
+            // 走工具拿到真实业务数据的提问不算知识盲区，只有"该查知识库却没查到"才留痕
+            recordGapIfWeak(cusUserId, session.getId(), content, bestScore, tools.isInvoked());
             references.forEach(item -> kbQuestionService.increaseHitCount(item.getId()));
 
             Map<String, Object> done = new LinkedHashMap<>();
@@ -355,14 +362,14 @@ public class ChatService {
      * 模型无法通过参数伪造身份查询他人保单。
      * </p>
      */
-    private ChatResponse callModel(AiModelConfig config, Long cusUserId, Long sessionId,
-                                   List<KbQuestion> references) {
+    private ChatResponse callModel(AiModelConfig config, InsuranceQueryTools tools, Long cusUserId,
+                                   Long sessionId, List<KbQuestion> references) {
         long start = System.currentTimeMillis();
         try {
             ChatClient chatClient = ChatClient.builder(aiModelFactory.toModel(config)).build();
             ChatResponse response = chatClient.prompt()
                     .messages(buildMessages(sessionId, references))
-                    .tools(new InsuranceQueryTools(policyService, cusUserId))
+                    .tools(tools)
                     .call()
                     .chatResponse();
             log.info("[智能客服] 模型调用完成 config={} model={} 耗时={}ms",
@@ -416,7 +423,10 @@ public class ChatService {
      * 知识库里并没有真正对应这个问题的标准问答。这类问题正是运营该补的。
      * </p>
      */
-    private void recordGapIfWeak(Long cusUserId, Long sessionId, String content, int bestScore) {
+    private void recordGapIfWeak(Long cusUserId, Long sessionId, String content, int bestScore, boolean toolUsed) {
+        if (toolUsed) {
+            return;
+        }
         if (bestScore < KbQuestionService.weakScoreThreshold()) {
             gapAnalysisService.record(cusUserId, sessionId, content, bestScore);
         }

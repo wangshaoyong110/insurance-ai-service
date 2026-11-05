@@ -433,7 +433,7 @@ ChatClient.create(chatModel)
 
 **长会话不失忆**：上下文只带最近 N 条消息，聊到十几轮后更早的诉求会被丢掉。`ChatService.appendEarlierDigest()` 把窗口之外的客户提问抽成一句「更早的沟通要点」注入 System，不额外调模型、不增加 token 费用。
 
-**答不上来要留痕**：`KbQuestionService.recallWithScore()` 除了返回命中的知识条目，还返回最高召回得分；`ChatService` 在「完全没命中」或「只有低分命中」时写一条 `chat_unknown`，后台「知识缺口」页据此按频次聚合，把客户真正在问、知识库却答不上的问题暴露出来。
+**答不上来要留痕**：`KbQuestionService.recallWithScore()` 除了返回命中的知识条目，还返回最高召回得分；`ChatService` 在「完全没命中」或「只有低分命中」时写一条 `chat_unknown`，后台「知识缺口」页据此按频次聚合，把客户真正在问、知识库却答不上的问题暴露出来。**走工具查到业务数据的提问不算盲区**（如"我名下有哪些保单"），否则后台会堆满根本不需要补语料的个人数据查询。
 
 ### 4. 已验证的 AI 场景
 

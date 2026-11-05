@@ -175,6 +175,17 @@ class InsuranceQueryToolsTest {
     }
 
     @Test
+    @DisplayName("调用过工具后 isInvoked 为真：用于区分「查业务数据」和「知识库缺语料」")
+    void shouldTrackInvocation() {
+        assertThat(tools.isInvoked()).isFalse();
+
+        when(policyService.listByCustomer(LOGIN_USER_ID)).thenReturn(List.of());
+        tools.listMyPolicies();
+
+        assertThat(tools.isInvoked()).isTrue();
+    }
+
+    @Test
     @DisplayName("既无逾期也无待缴时给出明确结论")
     void shouldReportNoPaymentWhenNothingDue() {
         when(policyService.listOverduePayments(LOGIN_USER_ID, LocalDate.now())).thenReturn(List.of());

@@ -19,6 +19,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 
 /**
@@ -51,9 +52,26 @@ public class InsuranceQueryTools {
     private final PolicyService policyService;
     private final Long cusUserId;
 
+    /**
+     * 本次对话是否真的调用过工具
+     * <p>用来区分两种"知识库没命中"：客户问的是业务数据（本就该走工具），还是知识库里确实缺这条语料。
+     * 前者若也被记成知识盲区，后台就会堆满"我下次什么时候交保费"这类根本不需要补语料的问题。</p>
+     */
+    private final AtomicBoolean invoked = new AtomicBoolean(false);
+
     public InsuranceQueryTools(PolicyService policyService, Long cusUserId) {
         this.policyService = policyService;
         this.cusUserId = cusUserId;
+    }
+
+    /** 标记工具已被模型调用 */
+    private void markInvoked() {
+        invoked.set(true);
+    }
+
+    /** 本轮是否调用过任一工具 */
+    public boolean isInvoked() {
+        return invoked.get();
     }
 
     /**
@@ -65,6 +83,7 @@ public class InsuranceQueryTools {
             不需要客户提供任何身份信息或保单号,系统按登录身份自动过滤。
             """)
     public String listMyPolicies() {
+        markInvoked();
         try {
             if (cusUserId == null) {
                 return "未获取到当前登录客户,无法查询保单。";
@@ -98,6 +117,7 @@ public class InsuranceQueryTools {
             """)
     public String getPolicyDetail(
             @ToolParam(description = "保单号,例如 P202403010002") String policyNo) {
+        markInvoked();
         try {
             if (cusUserId == null) {
                 return "未获取到当前登录客户,无法查询保单。";
@@ -148,6 +168,7 @@ public class InsuranceQueryTools {
             """)
     public String listMyClaims(
             @ToolParam(required = false, description = "保单号,可留空表示查询全部理赔记录") String policyNo) {
+        markInvoked();
         try {
             if (cusUserId == null) {
                 return "未获取到当前登录客户,无法查询理赔记录。";
@@ -187,6 +208,7 @@ public class InsuranceQueryTools {
             """)
     public String getClaimProgress(
             @ToolParam(description = "理赔案号,例如 CLM20261020001") String claimNo) {
+        markInvoked();
         try {
             if (cusUserId == null) {
                 return "未获取到当前登录客户,无法查询理赔进度。";
@@ -248,6 +270,7 @@ public class InsuranceQueryTools {
             结论仅为基于已有保单的初步分析,不构成投保建议。
             """)
     public String analyzeCoverageGap() {
+        markInvoked();
         try {
             if (cusUserId == null) {
                 return "未获取到当前登录客户,无法分析保障情况。";
@@ -332,6 +355,7 @@ public class InsuranceQueryTools {
             """)
     public String listUpcomingPayments(
             @ToolParam(required = false, description = "查询未来多少天,默认 30,最大 180") Integer days) {
+        markInvoked();
         try {
             if (cusUserId == null) {
                 return "未获取到当前登录客户,无法查询缴费计划。";
@@ -420,6 +444,7 @@ public class InsuranceQueryTools {
             """)
     public String getClaimChecklist(
             @ToolParam(required = false, description = "理赔类型:MEDICAL/CRITICAL/ACCIDENT/LIFE/OTHER") String claimType) {
+        markInvoked();
         try {
             String type = StringUtils.hasText(claimType) ? claimType.trim().toUpperCase() : "OTHER";
             List<String> items = switch (type) {
