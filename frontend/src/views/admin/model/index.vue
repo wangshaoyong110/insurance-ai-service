@@ -365,7 +365,7 @@ async function handleDelete(row: unknown): Promise<void> {
         </el-form-item>
 
         <el-form-item label="接口地址">
-          <el-input v-model="form.baseUrl" maxlength="255" placeholder="留空使用厂商默认地址;内网部署填行内网关地址" />
+          <el-input v-model="form.baseUrl" maxlength="255" placeholder="留空使用厂商默认地址(DeepSeek 模型自动指向 api.deepseek.com);内网部署填网关地址" />
         </el-form-item>
 
         <el-form-item label="API Key">

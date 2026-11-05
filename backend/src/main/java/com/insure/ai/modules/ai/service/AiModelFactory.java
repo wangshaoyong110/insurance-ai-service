@@ -53,6 +53,9 @@ public class AiModelFactory {
     /** 连通性测试使用的提示语 */
     private static final String PROBE_PROMPT = "请回复两个字:你好";
 
+    /** DeepSeek 官方 OpenAI 兼容地址 */
+    private static final String DEEPSEEK_BASE_URL = "https://api.deepseek.com";
+
     private final AiModelConfigMapper aiModelConfigMapper;
     private final SensitiveDataCipher sensitiveDataCipher;
 
@@ -161,8 +164,7 @@ public class AiModelFactory {
             throw new BusinessException(ResultCode.AI_MODEL_NOT_CONFIGURED, "该配置缺少 API Key");
         }
         AiProviderEnum provider = AiProviderEnum.of(config.getProvider());
-        String baseUrl = StringUtils.hasText(config.getBaseUrl())
-                ? config.getBaseUrl().trim() : provider.getDefaultBaseUrl();
+        String baseUrl = resolveBaseUrl(provider, config.getBaseUrl(), config.getModel());
         int timeoutMs = config.getTimeoutMs() == null ? 60_000 : config.getTimeoutMs();
         RestClient.Builder restClientBuilder = RestClient.builder()
                 .requestFactory(requestFactory(timeoutMs));
@@ -203,6 +205,23 @@ public class AiModelFactory {
                 .openAiApi(api)
                 .defaultOptions(optionsBuilder.build())
                 .build();
+    }
+
+    /**
+     * 解析接口地址
+     * <p>「OpenAI 兼容」留空时若模型名含 deepseek,默认指向 DeepSeek 官方接口,
+     * 避免误连 api.openai.com 导致国内服务器建连超时;其余情况走厂商默认地址。</p>
+     */
+    private String resolveBaseUrl(AiProviderEnum provider, String baseUrl, String model) {
+        if (StringUtils.hasText(baseUrl)) {
+            return baseUrl.trim();
+        }
+        if (provider == AiProviderEnum.OPENAI_COMPATIBLE && model != null
+                && model.toLowerCase().contains("deepseek")) {
+            log.info("[模型配置] 接口地址留空,模型名为 DeepSeek,默认使用 {}", DEEPSEEK_BASE_URL);
+            return DEEPSEEK_BASE_URL;
+        }
+        return provider.getDefaultBaseUrl();
     }
 
     /**
