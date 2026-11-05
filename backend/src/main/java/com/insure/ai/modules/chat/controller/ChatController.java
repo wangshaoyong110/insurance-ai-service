@@ -7,6 +7,7 @@ import com.insure.ai.common.annotation.RateLimit;
 import com.insure.ai.common.enums.InsuranceCategoryEnum;
 import com.insure.ai.common.util.SecurityUtils;
 import com.insure.ai.modules.chat.dto.ChatAnswerVO;
+import com.insure.ai.modules.chat.dto.ChatMessageSendDTO;
 import com.insure.ai.modules.chat.dto.ChatMessageVO;
 import com.insure.ai.modules.chat.dto.ChatSendDTO;
 import com.insure.ai.modules.chat.dto.ChatSessionVO;
@@ -87,6 +88,37 @@ public class ChatController {
                                                       @RequestParam(required = false) Long pageNum,
                                                       @RequestParam(required = false) Long pageSize) {
         return Result.success(chatService.listMessages(SecurityUtils.getUserId(), id, pageNum, pageSize));
+    }
+
+    /**
+     * 会话详情(含服务模式)
+     * <p>人工接入后前端需要知道"现在谁在答",以便切换到轮询模式并停止等待 AI</p>
+     */
+    @GetMapping("/sessions/{id}")
+    public Result<ChatSessionVO> sessionDetail(@PathVariable Long id) {
+        return Result.success(chatService.sessionDetail(SecurityUtils.getUserId(), id));
+    }
+
+    /**
+     * 增量拉取消息(轮询坐席回复)
+     *
+     * @param afterId 只返回 id 大于该值的消息,首次传 0
+     */
+    @GetMapping("/sessions/{id}/messages/after")
+    public Result<List<ChatMessageVO>> messagesAfter(@PathVariable Long id,
+                                                     @RequestParam(required = false) Long afterId) {
+        return Result.success(chatService.listMessagesAfter(SecurityUtils.getUserId(), id, afterId));
+    }
+
+    /**
+     * 发送消息(文字 / 图片 / 视频)
+     * <p>媒体文件先调 /file/upload 拿到 url,再调本接口发消息;人工接入时也可用本接口发文字</p>
+     */
+    @Log(module = "智能客服", operation = "发送消息")
+    @RateLimit(limit = 20, seconds = 60, key = "chat-msg", message = "发送太频繁了,请稍后再试")
+    @PostMapping("/messages")
+    public Result<ChatMessageVO> sendMessage(@Valid @RequestBody ChatMessageSendDTO dto) {
+        return Result.success(chatService.sendMessage(SecurityUtils.getUserId(), dto));
     }
 
     /**

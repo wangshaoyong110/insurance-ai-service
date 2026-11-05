@@ -15,6 +15,7 @@ export * from './modules/dashboard';
 export * from './modules/file';
 export * from './modules/cusAuth';
 export * from './modules/cusChat';
+export * from './modules/adminChat';
 export * from './modules/policy';
 export * from './modules/aiModel';
 export * from './modules/service';

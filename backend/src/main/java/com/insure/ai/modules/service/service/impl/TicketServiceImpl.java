@@ -8,6 +8,7 @@ import com.insure.ai.common.PageResult;
 import com.insure.ai.common.ResultCode;
 import com.insure.ai.common.enums.TicketReasonEnum;
 import com.insure.ai.common.enums.TicketStatusEnum;
+import com.insure.ai.modules.chat.service.ChatService;
 import com.insure.ai.modules.service.dto.TicketCreateDTO;
 import com.insure.ai.modules.service.dto.TicketHandleDTO;
 import com.insure.ai.modules.service.dto.TicketQuery;
@@ -58,6 +59,7 @@ public class TicketServiceImpl implements TicketService {
 
     private final ServiceTicketMapper ticketMapper;
     private final CusUserMapper cusUserMapper;
+    private final ChatService chatService;
 
     // ==================================================================
     // 客户侧
@@ -80,8 +82,13 @@ public class TicketServiceImpl implements TicketService {
         ticket.setStatus(TicketStatusEnum.PENDING.getCode());
         ticket.setPriority(dto.getPriority() == null ? 1 : Math.min(Math.max(dto.getPriority(), 1), 2));
         insertWithTicketNo(ticket);
-        log.info("[工单] 客户提交工单 no={} cusUserId={} reason={}",
-                ticket.getTicketNo(), cusUserId, ticket.getReason());
+        // 把工单挂到客户当前会话上:工单只是"服务凭证",真正的沟通留在原会话里,
+        // 客户不必换窗口,坐席接单后也能直接看到前因后果(sessionId 归属校验失败会回滚整笔)
+        if (ticket.getSessionId() != null) {
+            chatService.bindTicket(cusUserId, ticket.getSessionId(), ticket.getId());
+        }
+        log.info("[工单] 客户提交工单 no={} cusUserId={} reason={} sessionId={}",
+                ticket.getTicketNo(), cusUserId, ticket.getReason(), ticket.getSessionId());
         return ticket;
     }
 
@@ -111,6 +118,9 @@ public class TicketServiceImpl implements TicketService {
         update.setStatus(TicketStatusEnum.CANCELED.getCode());
         update.setFinishTime(LocalDateTime.now());
         ticketMapper.updateById(update);
+        if (ticket.getSessionId() != null) {
+            chatService.cancelTakeover(ticket.getSessionId(), "人工工单已取消,AI 助手已恢复服务。");
+        }
         log.info("[工单] 客户取消工单 no={} cusUserId={}", ticket.getTicketNo(), cusUserId);
     }
 
@@ -205,6 +215,16 @@ public class TicketServiceImpl implements TicketService {
             update.setFinishTime(LocalDateTime.now());
         }
         ticketMapper.updateById(update);
+        // 工单状态与会话状态必须同步:接单即接管会话,结单/取消则把会话交回 AI
+        if (ticket.getSessionId() != null) {
+            if (target == TicketStatusEnum.PROCESSING) {
+                chatService.takeover(ticket.getSessionId(), id, operatorId, operatorName);
+            } else if (target == TicketStatusEnum.FINISHED) {
+                chatService.finishTakeover(ticket.getSessionId(), dto.getReply(), operatorName);
+            } else if (target == TicketStatusEnum.CANCELED) {
+                chatService.cancelTakeover(ticket.getSessionId(), "人工工单已取消,AI 助手已恢复服务。");
+            }
+        }
         log.info("[工单] 状态流转 no={} {} -> {} 操作人={}",
                 ticket.getTicketNo(), TicketStatusEnum.descOf(ticket.getStatus()),
                 target.getDesc(), operatorName);

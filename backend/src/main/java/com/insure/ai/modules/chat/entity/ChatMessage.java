@@ -27,11 +27,26 @@ public class ChatMessage extends BaseEntity {
     /** 所属客户ID(cus_user.id) */
     private Long cusUserId;
 
-    /** 角色:user-用户 assistant-AI */
+    /** 角色:user-用户 assistant-AI staff-人工客服 system-系统 */
     private String role;
+
+    /** 消息类型:text/image/video/system */
+    private String msgType;
 
     /** 消息内容 */
     private String content;
+
+    /** 媒体地址(图片/视频) */
+    private String mediaUrl;
+
+    /** 原始文件名 */
+    private String mediaName;
+
+    /** 文件大小(字节) */
+    private Long mediaSize;
+
+    /** 发送者显示名(坐席姓名) */
+    private String senderName;
 
     /** 模型名称 */
     private String model;

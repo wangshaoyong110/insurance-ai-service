@@ -269,6 +269,10 @@ CREATE TABLE `chat_session`
     `id`                BIGINT       NOT NULL AUTO_INCREMENT COMMENT '主键ID',
     `cus_user_id`       BIGINT       NOT NULL COMMENT '所属客户ID(cus_user.id)',
     `title`             VARCHAR(100) NOT NULL DEFAULT '新会话' COMMENT '会话标题',
+    `service_mode`      TINYINT      NOT NULL DEFAULT 0 COMMENT '服务模式:0-AI自助 1-排队等人工 2-人工接入中',
+    `handler_id`        BIGINT                DEFAULT NULL COMMENT '接管坐席ID(sys_user.id)',
+    `handler_name`      VARCHAR(50)           DEFAULT NULL COMMENT '接管坐席姓名',
+    `ticket_id`         BIGINT                DEFAULT NULL COMMENT '关联工单ID(svc_ticket.id)',
     `last_message`      VARCHAR(500)          DEFAULT NULL COMMENT '最后一条消息摘要',
     `message_count`     INT          NOT NULL DEFAULT 0 COMMENT '消息条数',
     `last_message_time` DATETIME              DEFAULT NULL COMMENT '最后消息时间',
@@ -280,7 +284,9 @@ CREATE TABLE `chat_session`
     `deleted`           TINYINT      NOT NULL DEFAULT 0 COMMENT '逻辑删除: 0-未删除 1-已删除',
     PRIMARY KEY (`id`),
     KEY `idx_session_cus_user` (`cus_user_id`),
-    KEY `idx_session_last_time` (`last_message_time`)
+    KEY `idx_session_last_time` (`last_message_time`),
+    KEY `idx_session_service_mode` (`service_mode`),
+    KEY `idx_session_ticket` (`ticket_id`)
 ) ENGINE = InnoDB
   DEFAULT CHARSET = utf8mb4 COMMENT ='AI 会话表';
 
@@ -292,8 +298,13 @@ CREATE TABLE `chat_message`
     `id`          BIGINT      NOT NULL AUTO_INCREMENT COMMENT '主键ID',
     `session_id`  BIGINT      NOT NULL COMMENT '会话ID',
     `cus_user_id` BIGINT      NOT NULL COMMENT '所属客户ID',
-    `role`        VARCHAR(20) NOT NULL COMMENT '消息角色: system/user/assistant',
+    `role`        VARCHAR(20) NOT NULL COMMENT '消息角色: system/user/assistant/staff',
+    `msg_type`    VARCHAR(20) NOT NULL DEFAULT 'text' COMMENT '消息类型:text/image/video/system',
     `content`     TEXT        NOT NULL COMMENT '消息内容',
+    `media_url`   VARCHAR(500)         DEFAULT NULL COMMENT '媒体地址(图片/视频)',
+    `media_name`  VARCHAR(200)         DEFAULT NULL COMMENT '原始文件名',
+    `media_size`  BIGINT      NOT NULL DEFAULT 0 COMMENT '文件大小(字节)',
+    `sender_name` VARCHAR(50)          DEFAULT NULL COMMENT '发送者显示名(坐席姓名)',
     `model`       VARCHAR(50)          DEFAULT NULL COMMENT '生成模型(assistant 消息)',
     `tokens`      INT         NOT NULL DEFAULT 0 COMMENT '消耗 token 数',
     `remark`      VARCHAR(500)         DEFAULT NULL COMMENT '备注',

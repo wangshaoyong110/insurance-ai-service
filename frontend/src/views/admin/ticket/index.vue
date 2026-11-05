@@ -1,8 +1,23 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue';
-import { getTicketPageApi, getTicketStatisticsApi, handleTicketApi } from '@/api';
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
+import {
+  getAdminSessionMessagesApi,
+  getTicketPageApi,
+  getTicketStatisticsApi,
+  handleTicketApi,
+  sendStaffMessageApi,
+  uploadFileApi,
+} from '@/api';
 import { useTable } from '@/hooks/useTable';
-import type { FormField, TableColumn, TicketItem, TicketStatistics } from '@/types';
+import { CHAT_IMAGE_ACCEPT, CHAT_VIDEO_ACCEPT, checkUpload, formatFileSize } from '@/utils/uploadLimit';
+import type {
+  ChatMessageItem,
+  FormField,
+  TableColumn,
+  TicketItem,
+  TicketStatistics,
+  UploadResult,
+} from '@/types';
 import type { TicketQueryParams } from '@/types/api';
 
 /**
@@ -68,7 +83,7 @@ const columns: TableColumn<TicketItem>[] = [
   { prop: 'status', label: '状态', width: 90, slot: 'status' },
   { prop: 'handlerName', label: '处理人', width: 110, slot: 'handler' },
   { prop: 'createTime', label: '提交时间', width: 165 },
-  { label: '操作', width: 140, slot: 'action', fixed: 'right' },
+  { label: '操作', width: 200, slot: 'action', fixed: 'right' },
 ];
 
 function reasonName(code: string): string {
@@ -108,9 +123,11 @@ const acting = ref(false);
 async function accept(row: TicketItem): Promise<void> {
   acting.value = true;
   try {
-    await handleTicketApi(row.id, { status: 1 });
+    const result = await handleTicketApi(row.id, { status: 1 });
     ElMessage.success(`已接单 ${row.ticketNo}`);
     await refreshAll();
+    // 接单即接管:直接打开会话面板,坐席不用再回列表找入口
+    await openChat(result);
   } finally {
     acting.value = false;
   }
@@ -171,6 +188,165 @@ function openDetail(row: TicketItem): void {
   detail.value = row;
   detailVisible.value = true;
 }
+
+/* ---------------- 接入会话 ---------------- */
+const chatVisible = ref(false);
+const chatTicket = ref<TicketItem | null>(null);
+const chatMessages = ref<ChatMessageItem[]>([]);
+const chatLoading = ref(false);
+const chatSending = ref(false);
+const chatUploading = ref(false);
+const chatInput = ref('');
+const chatBody = ref<HTMLElement>();
+const imageInput = ref<HTMLInputElement>();
+const videoInput = ref<HTMLInputElement>();
+
+/** 只有处理中的工单可以发言；已结单仍可回看历史，但输入框收起 */
+const chatReadonly = computed<boolean>(() => chatTicket.value?.status !== 1);
+
+let chatTimer = 0;
+let chatPolling = false;
+
+async function scrollChat(): Promise<void> {
+  await nextTick();
+  const el = chatBody.value;
+  if (el) {
+    el.scrollTop = el.scrollHeight;
+  }
+}
+
+function maxChatId(): number {
+  return chatMessages.value.reduce((max, item) => Math.max(max, item.id > 0 ? item.id : 0), 0);
+}
+
+/**
+ * 加载会话消息
+ * @param reset true-全量重载(打开面板时);false-按游标增量
+ */
+async function loadChat(reset = false): Promise<void> {
+  if (!chatTicket.value?.sessionId) {
+    return;
+  }
+  const list = await getAdminSessionMessagesApi(
+    chatTicket.value.sessionId,
+    reset ? 0 : maxChatId(),
+  );
+  if (reset) {
+    chatMessages.value = list;
+  } else if (list.length) {
+    const known = new Set(chatMessages.value.filter((item) => item.id > 0).map((item) => item.id));
+    chatMessages.value.push(...list.filter((item) => !known.has(item.id)));
+  }
+  await scrollChat();
+}
+
+/**
+ * 打开坐席会话面板(接单后自动调用)
+ */
+async function openChat(row: TicketItem): Promise<void> {
+  if (!row.sessionId) {
+    ElMessage.warning('该工单未关联咨询会话');
+    return;
+  }
+  chatTicket.value = row;
+  chatVisible.value = true;
+  chatInput.value = '';
+  chatLoading.value = true;
+  try {
+    await loadChat(true);
+  } finally {
+    chatLoading.value = false;
+  }
+  startChatPolling();
+}
+
+function stopChatPolling(): void {
+  if (chatTimer) {
+    window.clearInterval(chatTimer);
+    chatTimer = 0;
+  }
+}
+
+function startChatPolling(): void {
+  stopChatPolling();
+  chatTimer = window.setInterval(() => {
+    void pollChat();
+  }, 3000);
+}
+
+async function pollChat(): Promise<void> {
+  if (!chatVisible.value || chatPolling || !chatTicket.value?.sessionId) {
+    return;
+  }
+  chatPolling = true;
+  try {
+    await loadChat(false);
+  } catch {
+    // 轮询失败静默,下一轮重试
+  } finally {
+    chatPolling = false;
+  }
+}
+
+async function sendChat(): Promise<void> {
+  const content = chatInput.value.trim();
+  if (!content || chatSending.value || !chatTicket.value?.sessionId) {
+    return;
+  }
+  chatSending.value = true;
+  try {
+    const saved = await sendStaffMessageApi(chatTicket.value.sessionId, { content, msgType: 'text' });
+    chatMessages.value.push(saved);
+    chatInput.value = '';
+    await scrollChat();
+  } finally {
+    chatSending.value = false;
+  }
+}
+
+function pickChatMedia(kind: 'image' | 'video'): void {
+  if (chatUploading.value) {
+    return;
+  }
+  (kind === 'image' ? imageInput.value : videoInput.value)?.click();
+}
+
+async function handleChatFile(event: Event, kind: 'image' | 'video'): Promise<void> {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = '';
+  if (!file || !chatTicket.value?.sessionId) {
+    return;
+  }
+  const error = checkUpload(file, kind === 'image' ? 'chat-image' : 'chat-video');
+  if (error) {
+    ElMessage.warning(error);
+    return;
+  }
+  chatUploading.value = true;
+  try {
+    const uploaded: UploadResult = await uploadFileApi(file, 'chat');
+    const saved = await sendStaffMessageApi(chatTicket.value.sessionId, {
+      msgType: kind,
+      mediaUrl: uploaded.url,
+      mediaName: uploaded.name,
+      mediaSize: uploaded.size,
+      content: '',
+    });
+    chatMessages.value.push(saved);
+    await scrollChat();
+  } finally {
+    chatUploading.value = false;
+  }
+}
+
+function closeChat(): void {
+  chatVisible.value = false;
+  chatMessages.value = [];
+  stopChatPolling();
+}
+
+onBeforeUnmount(stopChatPolling);
 
 onMounted(loadStatistics);
 </script>
@@ -246,6 +422,7 @@ onMounted(loadStatistics);
 
         <template #action="{ row }">
           <el-button link type="primary" @click="openDetail(row)">详情</el-button>
+          <el-button v-if="row.sessionId" link type="primary" @click="openChat(row)">会话</el-button>
           <el-button
             v-if="row.status === 0"
             link
@@ -324,6 +501,111 @@ onMounted(loadStatistics);
         <el-descriptions-item label="结单时间">{{ detail.finishTime || '-' }}</el-descriptions-item>
       </el-descriptions>
     </el-drawer>
+
+    <!-- 坐席会话抽屉：与客户共用同一个会话，历史上下文都在这里 -->
+    <el-drawer
+      v-model="chatVisible"
+      :title="chatTicket ? `会话 · ${chatTicket.ticketNo}` : '会话'"
+      size="560px"
+      @close="closeChat"
+    >
+      <div class="chat-panel">
+        <div class="chat-panel__head">
+          <span class="chat-panel__customer">
+            {{ chatTicket?.customerName || '-' }}
+            <small>{{ chatTicket?.customerPhone || '' }}</small>
+          </span>
+          <el-tag v-if="chatTicket" :type="chatTicket.status === 1 ? 'success' : 'info'" size="small">
+            {{ chatTicket.status === 1 ? '处理中 · 可直接回复' : '只读 · 工单不在处理中' }}
+          </el-tag>
+        </div>
+
+        <div ref="chatBody" v-loading="chatLoading" class="chat-panel__body">
+          <template v-for="m in chatMessages" :key="m.id">
+            <p v-if="m.role === 'system'" class="chat-sys">{{ m.content }}</p>
+            <div v-else class="chat-msg" :class="`chat-msg--${m.role}`">
+              <div class="chat-msg__meta">
+                <span>
+                  {{
+                    m.role === 'staff'
+                      ? m.senderName || '我'
+                      : m.role === 'user'
+                        ? chatTicket?.customerName || '客户'
+                        : 'AI 助手'
+                  }}
+                </span>
+                <span>{{ m.createTime }}</span>
+              </div>
+              <div class="chat-msg__bubble">
+                <el-image
+                  v-if="m.msgType === 'image' && m.mediaUrl"
+                  :src="m.mediaUrl"
+                  :preview-src-list="[m.mediaUrl]"
+                  fit="cover"
+                  preview-teleported
+                  class="chat-msg__image"
+                />
+                <video
+                  v-else-if="m.msgType === 'video' && m.mediaUrl"
+                  :src="m.mediaUrl"
+                  class="chat-msg__video"
+                  controls
+                ></video>
+                <p v-else class="chat-msg__text">{{ m.content }}</p>
+                <span v-if="m.mediaSize" class="chat-msg__size">{{ formatFileSize(m.mediaSize) }}</span>
+              </div>
+            </div>
+          </template>
+          <p v-if="!chatLoading && chatMessages.length === 0" class="chat-empty">暂无消息</p>
+        </div>
+
+        <div v-if="!chatReadonly" class="chat-panel__composer">
+          <button
+            type="button"
+            class="chat-tool"
+            :disabled="chatUploading"
+            title="发送图片"
+            @click="pickChatMedia('image')"
+          >
+            <el-icon :size="18"><Picture /></el-icon>
+          </button>
+          <button
+            type="button"
+            class="chat-tool"
+            :disabled="chatUploading"
+            title="发送视频"
+            @click="pickChatMedia('video')"
+          >
+            <el-icon :size="18"><VideoCamera /></el-icon>
+          </button>
+          <input
+            ref="imageInput"
+            type="file"
+            hidden
+            :accept="CHAT_IMAGE_ACCEPT"
+            @change="handleChatFile($event, 'image')"
+          />
+          <input
+            ref="videoInput"
+            type="file"
+            hidden
+            :accept="CHAT_VIDEO_ACCEPT"
+            @change="handleChatFile($event, 'video')"
+          />
+          <el-input
+            v-model="chatInput"
+            type="textarea"
+            :rows="2"
+            maxlength="1000"
+            resize="none"
+            placeholder="回复客户，Enter 发送，Shift+Enter 换行"
+            @keydown.enter.exact.prevent="sendChat"
+          />
+          <el-button type="primary" :loading="chatSending" @click="sendChat">发送</el-button>
+        </div>
+        <p v-else class="chat-panel__tip">该工单当前不在「处理中」，仅可查看历史记录。接单后即可与客户对话。</p>
+      </div>
+    </el-drawer>
   </div>
 </template>
 
@@ -401,5 +683,166 @@ onMounted(loadStatistics);
     width: 96px;
     white-space: nowrap;
   }
+}
+
+/* ---------------- 坐席会话面板 ---------------- */
+.chat-panel {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 120px);
+
+  &__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-bottom: 10px;
+    border-bottom: 1px solid #eef1f6;
+  }
+
+  &__customer {
+    font-size: 14px;
+    font-weight: 600;
+    color: #1f2d3d;
+
+    small {
+      margin-left: 6px;
+      font-weight: 400;
+      color: #98a2b3;
+    }
+  }
+
+  &__body {
+    flex: 1;
+    margin-top: 8px;
+    padding: 12px;
+    overflow-y: auto;
+    background: #f7f9fc;
+    border-radius: 10px;
+  }
+
+  &__composer {
+    display: flex;
+    align-items: flex-end;
+    gap: 8px;
+    padding-top: 10px;
+    border-top: 1px solid #eef1f6;
+  }
+
+  &__tip {
+    padding-top: 10px;
+    font-size: 12px;
+    color: #98a2b3;
+    border-top: 1px solid #eef1f6;
+  }
+}
+
+.chat-sys {
+  max-width: 88%;
+  margin: 10px auto;
+  padding: 5px 10px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #667085;
+  text-align: center;
+  background: #eef1f6;
+  border-radius: 10px;
+}
+
+.chat-msg {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  margin-bottom: 12px;
+
+  &__meta {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 3px;
+    font-size: 11px;
+    color: #98a2b3;
+  }
+
+  &__bubble {
+    max-width: 78%;
+    padding: 8px 11px;
+    background: #fff;
+    border-radius: 10px;
+    box-shadow: 0 1px 4px rgba(16, 24, 40, 0.05);
+  }
+
+  &__text {
+    font-size: 13px;
+    line-height: 1.7;
+    color: #1f2d3d;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  &__image {
+    display: block;
+    max-width: 220px;
+    max-height: 220px;
+    border-radius: 8px;
+  }
+
+  &__video {
+    display: block;
+    width: 240px;
+    max-height: 240px;
+    background: #000;
+    border-radius: 8px;
+  }
+
+  &__size {
+    display: block;
+    margin-top: 4px;
+    font-size: 11px;
+    color: #98a2b3;
+  }
+
+  /* 坐席自己发的靠右,与微信式会话一致 */
+  &--staff {
+    align-items: flex-end;
+
+    .chat-msg__meta {
+      justify-content: flex-end;
+    }
+
+    .chat-msg__bubble {
+      background: #eff8ff;
+    }
+  }
+
+  &--assistant .chat-msg__bubble {
+    background: #f4f6fb;
+  }
+}
+
+.chat-tool {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  color: #667085;
+  background: #f4f6fb;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+
+  &:hover {
+    color: #1b5faa;
+  }
+
+  &:disabled {
+    opacity: 0.4;
+  }
+}
+
+.chat-empty {
+  padding: 30px 0;
+  font-size: 12px;
+  color: #98a2b3;
+  text-align: center;
 }
 </style>

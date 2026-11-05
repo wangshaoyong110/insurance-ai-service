@@ -14,6 +14,8 @@ public enum ChatRoleEnum {
     USER("user", "用户"),
     /** AI 回复 */
     ASSISTANT("assistant", "智能客服"),
+    /** 人工客服回复(坐席接入后产生) */
+    STAFF("staff", "人工客服"),
     /** 系统提示词 */
     SYSTEM("system", "系统");
 

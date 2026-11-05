@@ -9,14 +9,18 @@ import com.insure.ai.common.BusinessException;
 import com.insure.ai.common.Constants;
 import com.insure.ai.common.PageResult;
 import com.insure.ai.common.ResultCode;
+import com.insure.ai.common.enums.ChatMessageTypeEnum;
 import com.insure.ai.common.enums.ChatRoleEnum;
 import com.insure.ai.common.enums.CommonStatusEnum;
 import com.insure.ai.common.enums.InsuranceCategoryEnum;
+import com.insure.ai.common.enums.ServiceModeEnum;
 import com.insure.ai.config.DeepSeekProperties;
+import com.insure.ai.config.UploadProperties;
 import com.insure.ai.modules.ai.entity.AiModelConfig;
 import com.insure.ai.modules.ai.service.AiModelFactory;
 import com.insure.ai.modules.ai.tool.InsuranceQueryTools;
 import com.insure.ai.modules.chat.dto.ChatAnswerVO;
+import com.insure.ai.modules.chat.dto.ChatMessageSendDTO;
 import com.insure.ai.modules.chat.dto.ChatMessageVO;
 import com.insure.ai.modules.chat.dto.ChatSendDTO;
 import com.insure.ai.modules.chat.dto.ChatSessionVO;
@@ -52,6 +56,7 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -87,6 +92,10 @@ public class ChatServiceImpl implements ChatService {
     private static final int DIGEST_QUESTION_LIMIT = 8;
     /** 早期对话要点中单条提问的最大长度 */
     private static final int DIGEST_ITEM_LENGTH = 40;
+    /** 坐席一次最多拉取的会话消息条数 */
+    private static final int ADMIN_MESSAGE_LIMIT = 200;
+    /** 增量轮询单次最多返回条数 */
+    private static final int POLL_MESSAGE_LIMIT = 100;
 
     private final ChatSessionMapper chatSessionMapper;
     private final ChatMessageMapper chatMessageMapper;
@@ -97,6 +106,7 @@ public class ChatServiceImpl implements ChatService {
     private final AiModelFactory aiModelFactory;
     private final PolicyService policyService;
     private final ObjectMapper objectMapper;
+    private final UploadProperties uploadProperties;
 
     /** 流式对话专用线程池(复用全局 taskExecutor,已带 traceId 传递) */
     @Resource(name = "taskExecutor")
@@ -151,6 +161,14 @@ public class ChatServiceImpl implements ChatService {
     }
 
     /**
+     * 会话详情
+     */
+    @Override
+    public ChatSessionVO sessionDetail(Long cusUserId, Long sessionId) {
+        return ChatSessionVO.from(requireOwnSession(cusUserId, sessionId));
+    }
+
+    /**
      * 删除会话(逻辑删除,同时删除会话下的消息)
      */
     @Transactional(rollbackFor = Exception.class)
@@ -188,6 +206,14 @@ public class ChatServiceImpl implements ChatService {
         ChatSession session = resolveSession(cusUserId, dto.getSessionId(), content);
         // 2. 用户消息先落库,保证即使模型调用失败也有历史记录
         saveMessage(session.getId(), cusUserId, ChatRoleEnum.USER, content, null, 0);
+        // 2.1 人工已接管:消息照常落库(坐席能看到),但不能再让 AI 抢答
+        if (ServiceModeEnum.of(session.getServiceMode()).isHuman()) {
+            touchSession(session.getId(), content);
+            ChatAnswerVO human = new ChatAnswerVO();
+            human.setSessionId(session.getId());
+            human.setServiceMode(session.getServiceMode());
+            return human;
+        }
         // 3. 知识库召回 + 组装上下文
         RecallResult recall = kbQuestionService.recallWithScore(content, RECALL_LIMIT);
         List<KbQuestion> references = recall.items();
@@ -228,6 +254,24 @@ public class ChatServiceImpl implements ChatService {
         validateContent(content);
         ChatSession session = resolveSession(cusUserId, dto.getSessionId(), content);
         saveMessage(session.getId(), cusUserId, ChatRoleEnum.USER, content, null, 0);
+        // 人工已接管时直接回一个空回复事件：前端收到 serviceMode=2 便不再等待 AI,改为轮询坐席消息
+        if (ServiceModeEnum.of(session.getServiceMode()).isHuman()) {
+            touchSession(session.getId(), content);
+            SseEmitter emitter = new SseEmitter(STREAM_TIMEOUT_MS);
+            chatExecutor.execute(() -> {
+                Map<String, Object> meta = new LinkedHashMap<>();
+                meta.put("sessionId", session.getId());
+                meta.put("serviceMode", session.getServiceMode());
+                meta.put("references", List.of());
+                sendEvent(emitter, "meta", meta);
+                Map<String, Object> done = new LinkedHashMap<>();
+                done.put("sessionId", session.getId());
+                done.put("serviceMode", session.getServiceMode());
+                sendEvent(emitter, "done", done);
+                emitter.complete();
+            });
+            return emitter;
+        }
         RecallResult recall = kbQuestionService.recallWithScore(content, RECALL_LIMIT);
         List<KbQuestion> references = recall.items();
         AiModelConfig config = aiModelFactory.defaultConfig();
@@ -240,6 +284,270 @@ public class ChatServiceImpl implements ChatService {
         chatExecutor.execute(() -> streamToEmitter(emitter, config, cusUserId, session, content, references,
                 tools, recall.bestScore()));
         return emitter;
+    }
+
+    /* ==================================================================
+     * 人工接管:工单与会话共用一个窗口
+     * ================================================================== */
+
+    /**
+     * 客户发送文字 / 图片 / 视频消息
+     */
+    @Transactional(rollbackFor = Exception.class)
+    @Override
+    public ChatMessageVO sendMessage(Long cusUserId, ChatMessageSendDTO dto) {
+        ChatMessageTypeEnum type = ChatMessageTypeEnum.of(dto.getMsgType());
+        if (type == ChatMessageTypeEnum.SYSTEM) {
+            throw new BusinessException(ResultCode.PARAM_ERROR.getCode(), "不支持发送系统消息");
+        }
+        String content = dto.getContent() == null ? "" : dto.getContent().trim();
+        if (type.isMedia()) {
+            validateMedia(type, dto);
+        } else if (!StringUtils.hasText(content)) {
+            throw new BusinessException(ResultCode.PARAM_ERROR.getCode(), "消息内容不能为空");
+        }
+        String title = StringUtils.hasText(content) ? content : "[" + type.getDesc() + "]";
+        ChatSession session = resolveSession(cusUserId, dto.getSessionId(), title);
+        ChatMessage message = appendMessage(session.getId(), cusUserId, ChatRoleEnum.USER, type, content,
+                dto.getMediaUrl(), dto.getMediaName(), dto.getMediaSize(), null, null, 0);
+        return ChatMessageVO.from(message);
+    }
+
+    /**
+     * 增量拉取消息(客户端轮询坐席回复)
+     */
+    @Override
+    public List<ChatMessageVO> listMessagesAfter(Long cusUserId, Long sessionId, Long afterId) {
+        ChatSession session = requireOwnSession(cusUserId, sessionId);
+        return queryAfter(session.getId(), afterId);
+    }
+
+    /**
+     * 坐席侧拉取会话消息
+     * <p>首次打开面板返回最近 200 条并翻回正序;之后用 afterId 做增量轮询</p>
+     */
+    @Override
+    public List<ChatMessageVO> adminMessages(Long sessionId, Long afterId) {
+        requireSession(sessionId);
+        if (afterId != null && afterId > 0) {
+            return queryAfter(sessionId, afterId);
+        }
+        List<ChatMessage> list = chatMessageMapper.selectList(Wrappers.<ChatMessage>lambdaQuery()
+                .eq(ChatMessage::getSessionId, sessionId)
+                .orderByDesc(ChatMessage::getId)
+                .last("LIMIT " + ADMIN_MESSAGE_LIMIT));
+        List<ChatMessageVO> records = new ArrayList<>(list.stream().map(ChatMessageVO::from).toList());
+        Collections.reverse(records);
+        return records;
+    }
+
+    /**
+     * 坐席发送消息
+     */
+    @Transactional(rollbackFor = Exception.class)
+    @Override
+    public ChatMessageVO staffSend(Long sessionId, Long operatorId, String operatorName, ChatMessageSendDTO dto) {
+        ChatSession session = requireSession(sessionId);
+        ServiceModeEnum mode = ServiceModeEnum.of(session.getServiceMode());
+        if (!mode.isHuman()) {
+            throw new BusinessException(ResultCode.TICKET_STATUS_INVALID.getCode(), "请先接单后再回复客户");
+        }
+        if (session.getHandlerId() != null && !Objects.equals(session.getHandlerId(), operatorId)) {
+            throw new BusinessException(ResultCode.TICKET_STATUS_INVALID.getCode(),
+                    "该会话已由 " + session.getHandlerName() + " 接管");
+        }
+        ChatMessageTypeEnum type = ChatMessageTypeEnum.of(dto.getMsgType());
+        if (type == ChatMessageTypeEnum.SYSTEM) {
+            throw new BusinessException(ResultCode.PARAM_ERROR.getCode(), "不支持发送系统消息");
+        }
+        String content = dto.getContent() == null ? "" : dto.getContent().trim();
+        if (type.isMedia()) {
+            validateMedia(type, dto);
+        } else if (!StringUtils.hasText(content)) {
+            throw new BusinessException(ResultCode.PARAM_ERROR.getCode(), "消息内容不能为空");
+        }
+        ChatMessage message = appendMessage(session.getId(), session.getCusUserId(), ChatRoleEnum.STAFF,
+                type, content, dto.getMediaUrl(), dto.getMediaName(), dto.getMediaSize(),
+                StringUtils.hasText(operatorName) ? operatorName : "人工客服", null, 0);
+        return ChatMessageVO.from(message);
+    }
+
+    /**
+     * 客户提交工单:会话转入排队,AI 仍可回答
+     */
+    @Override
+    public void bindTicket(Long cusUserId, Long sessionId, Long ticketId) {
+        ChatSession session = requireOwnSession(cusUserId, sessionId);
+        ChatSession update = new ChatSession();
+        update.setId(session.getId());
+        update.setServiceMode(ServiceModeEnum.WAITING.getCode());
+        update.setTicketId(ticketId);
+        chatSessionMapper.updateById(update);
+        appendMessage(session.getId(), cusUserId, ChatRoleEnum.SYSTEM, ChatMessageTypeEnum.SYSTEM,
+                "已提交人工工单,正在为你安排客服。排队期间仍可继续咨询,客服接入后会在这里回复你。",
+                null, null, null, null, null, 0);
+    }
+
+    /**
+     * 坐席接单:接管会话,AI 静默
+     */
+    @Override
+    public void takeover(Long sessionId, Long ticketId, Long operatorId, String operatorName) {
+        ChatSession session = requireSession(sessionId);
+        ServiceModeEnum mode = ServiceModeEnum.of(session.getServiceMode());
+        if (mode.isHuman() && session.getHandlerId() != null
+                && !Objects.equals(session.getHandlerId(), operatorId)) {
+            throw new BusinessException(ResultCode.TICKET_STATUS_INVALID.getCode(),
+                    "该会话已由 " + session.getHandlerName() + " 接管");
+        }
+        ChatSession update = new ChatSession();
+        update.setId(session.getId());
+        update.setServiceMode(ServiceModeEnum.HUMAN.getCode());
+        update.setHandlerId(operatorId);
+        update.setHandlerName(operatorName);
+        if (ticketId != null) {
+            update.setTicketId(ticketId);
+        }
+        chatSessionMapper.updateById(update);
+        appendMessage(session.getId(), session.getCusUserId(), ChatRoleEnum.SYSTEM, ChatMessageTypeEnum.SYSTEM,
+                "客服 " + operatorName + " 已接入本会话,AI 已暂停回答,你可以直接在这里沟通。",
+                null, null, null, null, null, 0);
+        log.info("[人工接管] 会话 {} 由 {} 接管 ticketId={}", sessionId, operatorName, ticketId);
+    }
+
+    /**
+     * 结单:坐席答复写入会话,交回 AI
+     */
+    @Override
+    public void finishTakeover(Long sessionId, String reply, String operatorName) {
+        ChatSession session = requireSession(sessionId);
+        if (StringUtils.hasText(reply)) {
+            appendMessage(session.getId(), session.getCusUserId(), ChatRoleEnum.STAFF,
+                    ChatMessageTypeEnum.TEXT, reply.trim(), null, null, null,
+                    StringUtils.hasText(operatorName) ? operatorName : "人工客服", null, 0);
+        }
+        appendMessage(session.getId(), session.getCusUserId(), ChatRoleEnum.SYSTEM, ChatMessageTypeEnum.SYSTEM,
+                "本次人工服务已结束,AI 助手已恢复。如仍有问题可以继续提问。",
+                null, null, null, null, null, 0);
+        releaseSession(session.getId());
+    }
+
+    /**
+     * 工单取消:交回 AI
+     */
+    @Override
+    public void cancelTakeover(Long sessionId, String notice) {
+        ChatSession session = requireSession(sessionId);
+        appendMessage(session.getId(), session.getCusUserId(), ChatRoleEnum.SYSTEM, ChatMessageTypeEnum.SYSTEM,
+                StringUtils.hasText(notice) ? notice : "人工工单已取消,AI 助手已恢复服务。",
+                null, null, null, null, null, 0);
+        releaseSession(session.getId());
+    }
+
+    /**
+     * 会话交回 AI
+     */
+    private void releaseSession(Long sessionId) {
+        // 必须用 UpdateWrapper 显式 set null:updateById 默认忽略 null 字段,
+        // 否则 handler_id / handler_name 会一直留着上一任坐席,影响下次接管的归属判断
+        chatSessionMapper.update(null, Wrappers.<ChatSession>lambdaUpdate()
+                .eq(ChatSession::getId, sessionId)
+                .set(ChatSession::getServiceMode, ServiceModeEnum.AI.getCode())
+                .set(ChatSession::getHandlerId, null)
+                .set(ChatSession::getHandlerName, null));
+    }
+
+    /**
+     * 校验客户上传的媒体地址
+     * <p>只接受本站上传返回的地址,防止把任意外链塞进会话变成钓鱼图片或追踪像素</p>
+     */
+    private void validateMedia(ChatMessageTypeEnum type, ChatMessageSendDTO dto) {
+        String url = dto.getMediaUrl();
+        String prefix = uploadProperties.getUrlPrefix();
+        if (!StringUtils.hasText(url)) {
+            throw new BusinessException(ResultCode.PARAM_ERROR.getCode(), "请先上传" + type.getDesc());
+        }
+        if (!StringUtils.hasText(prefix) || !url.startsWith(prefix) || url.contains("..")) {
+            throw new BusinessException(ResultCode.PARAM_ERROR.getCode(), "媒体地址不合法,请重新上传");
+        }
+        long max = uploadProperties.getMaxSize() == null ? 0 : uploadProperties.getMaxSize().toBytes();
+        if (dto.getMediaSize() != null && max > 0 && dto.getMediaSize() > max) {
+            throw new BusinessException(ResultCode.FILE_SIZE_EXCEEDED.getCode(),
+                    "文件大小超出限制(最大 " + uploadProperties.maxSizeText() + ")");
+        }
+    }
+
+    /**
+     * 取 afterId 之后的增量消息
+     */
+    private List<ChatMessageVO> queryAfter(Long sessionId, Long afterId) {
+        long cursor = afterId == null || afterId < 0 ? 0L : afterId;
+        List<ChatMessage> list = chatMessageMapper.selectList(Wrappers.<ChatMessage>lambdaQuery()
+                .eq(ChatMessage::getSessionId, sessionId)
+                .gt(ChatMessage::getId, cursor)
+                .orderByAsc(ChatMessage::getId)
+                .last("LIMIT " + POLL_MESSAGE_LIMIT));
+        return list.stream().map(ChatMessageVO::from).toList();
+    }
+
+    /**
+     * 追加一条消息并同步会话摘要
+     */
+    private ChatMessage appendMessage(Long sessionId, Long cusUserId, ChatRoleEnum role,
+                                      ChatMessageTypeEnum type, String content, String mediaUrl,
+                                      String mediaName, Long mediaSize, String senderName,
+                                      String model, Integer tokens) {
+        ChatMessage message = new ChatMessage();
+        message.setSessionId(sessionId);
+        message.setCusUserId(cusUserId);
+        message.setRole(role.getCode());
+        message.setMsgType(type.getCode());
+        message.setContent(content == null ? "" : content);
+        message.setMediaUrl(mediaUrl);
+        message.setMediaName(mediaName);
+        message.setMediaSize(mediaSize == null ? 0L : mediaSize);
+        message.setSenderName(senderName);
+        message.setModel(model);
+        message.setTokens(tokens == null ? 0 : tokens);
+        chatMessageMapper.insert(message);
+        touchSession(sessionId, previewOf(message));
+        return message;
+    }
+
+    /**
+     * 会话摘要只存一行预览:图片/视频没有文字时给个占位,避免列表里空白
+     */
+    private String previewOf(ChatMessage message) {
+        if (StringUtils.hasText(message.getContent())) {
+            return message.getContent();
+        }
+        ChatMessageTypeEnum type = ChatMessageTypeEnum.of(message.getMsgType());
+        return "[" + type.getDesc() + "]";
+    }
+
+    /**
+     * 更新会话的最后消息与条数
+     */
+    private void touchSession(Long sessionId, String preview) {
+        ChatSession current = chatSessionMapper.selectById(sessionId);
+        ChatSession update = new ChatSession();
+        update.setId(sessionId);
+        update.setLastMessage(truncate(preview, SUMMARY_MAX_LENGTH));
+        update.setLastMessageTime(LocalDateTime.now());
+        update.setMessageCount((current == null || current.getMessageCount() == null
+                ? 0 : current.getMessageCount()) + 1);
+        chatSessionMapper.updateById(update);
+    }
+
+    /**
+     * 按 ID 取会话(坐席侧使用,鉴权在控制器层)
+     */
+    private ChatSession requireSession(Long sessionId) {
+        ChatSession session = sessionId == null ? null : chatSessionMapper.selectById(sessionId);
+        if (session == null) {
+            throw new BusinessException(ResultCode.CHAT_SESSION_NOT_EXIST);
+        }
+        return session;
     }
 
     /**
@@ -462,6 +770,7 @@ public class ChatServiceImpl implements ChatService {
             ChatSession session = new ChatSession();
             session.setCusUserId(cusUserId);
             session.setTitle(truncate(content, Constants.SESSION_TITLE_MAX_LENGTH));
+            session.setServiceMode(ServiceModeEnum.AI.getCode());
             session.setMessageCount(0);
             session.setLastMessage(truncate(content, SUMMARY_MAX_LENGTH));
             session.setLastMessageTime(LocalDateTime.now());
@@ -503,14 +812,22 @@ public class ChatServiceImpl implements ChatService {
         appendEarlierDigest(messages, sessionId, history);
 
         for (ChatMessage item : history) {
-            if (!StringUtils.hasText(item.getContent())) {
-                continue;
+            // 图片/视频消息可能没有文字,给模型一个占位描述,否则整段上下文会缺一环
+            String text = item.getContent();
+            if (!StringUtils.hasText(text)) {
+                ChatMessageTypeEnum type = ChatMessageTypeEnum.of(item.getMsgType());
+                if (!type.isMedia()) {
+                    continue;
+                }
+                text = "[" + type.getDesc() + "]";
             }
             ChatRoleEnum role = ChatRoleEnum.of(item.getRole());
+            String finalText = text;
             messages.add(switch (role) {
-                case USER -> new UserMessage(item.getContent());
-                case ASSISTANT -> new AssistantMessage(item.getContent());
-                case SYSTEM -> new SystemMessage(item.getContent());
+                case USER -> new UserMessage(finalText);
+                // 人工客服说过的内容对模型而言等同于助手历史回复,否则交回 AI 后会"忘记"人工已答复过什么
+                case ASSISTANT, STAFF -> new AssistantMessage(finalText);
+                case SYSTEM -> new SystemMessage(finalText);
             });
         }
         log.debug("[智能客服] 上下文消息数={}", messages.size());
@@ -561,7 +878,9 @@ public class ChatServiceImpl implements ChatService {
         message.setSessionId(sessionId);
         message.setCusUserId(cusUserId);
         message.setRole(role.getCode());
+        message.setMsgType(ChatMessageTypeEnum.TEXT.getCode());
         message.setContent(content);
+        message.setMediaSize(0L);
         message.setModel(model);
         message.setTokens(tokens == null ? 0 : tokens);
         chatMessageMapper.insert(message);

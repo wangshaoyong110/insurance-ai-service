@@ -106,11 +106,21 @@ onMounted(loadTickets);
         </div>
         <p v-else-if="item.status === 1" class="ticket-card__waiting">
           <el-icon><Loading /></el-icon>
-          {{ item.handlerName || '坐席' }} 正在处理，请稍候
+          {{ item.handlerName || '坐席' }} 正在处理，回复会出现在原咨询会话里
         </p>
 
-        <div v-if="item.status === 0" class="ticket-card__actions">
-          <button type="button" class="cancel-btn" @click="cancel(item)">取消工单</button>
+        <div v-if="item.sessionId || item.status === 0" class="ticket-card__actions">
+          <button
+            v-if="item.sessionId"
+            type="button"
+            class="chat-btn"
+            @click="router.push(`/chat?sessionId=${item.sessionId}`)"
+          >
+            进入会话
+          </button>
+          <button v-if="item.status === 0" type="button" class="cancel-btn" @click="cancel(item)">
+            取消工单
+          </button>
         </div>
       </article>
     </main>
@@ -283,9 +293,21 @@ onMounted(loadTickets);
   }
 
   &__actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
     margin-top: 12px;
-    text-align: right;
   }
+}
+
+.chat-btn {
+  padding: 6px 14px;
+  font-size: 12px;
+  color: #fff;
+  background: linear-gradient(135deg, #1b5faa, #3f8ed0);
+  border: none;
+  border-radius: 18px;
+  cursor: pointer;
 }
 
 .cancel-btn {

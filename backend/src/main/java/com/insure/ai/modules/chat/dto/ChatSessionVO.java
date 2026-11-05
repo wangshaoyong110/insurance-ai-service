@@ -19,6 +19,12 @@ public class ChatSessionVO implements Serializable {
     private Long id;
     /** 会话标题 */
     private String title;
+    /** 服务模式:0-AI自助 1-排队等人工 2-人工接入中 */
+    private Integer serviceMode;
+    /** 接管坐席姓名 */
+    private String handlerName;
+    /** 关联工单ID */
+    private Long ticketId;
     /** 最后一条消息摘要 */
     private String lastMessage;
     /** 消息条数 */
@@ -34,6 +40,9 @@ public class ChatSessionVO implements Serializable {
         ChatSessionVO vo = new ChatSessionVO();
         vo.setId(session.getId());
         vo.setTitle(session.getTitle());
+        vo.setServiceMode(session.getServiceMode());
+        vo.setHandlerName(session.getHandlerName());
+        vo.setTicketId(session.getTicketId());
         vo.setLastMessage(session.getLastMessage());
         vo.setMessageCount(session.getMessageCount());
         vo.setLastMessageTime(session.getLastMessageTime());

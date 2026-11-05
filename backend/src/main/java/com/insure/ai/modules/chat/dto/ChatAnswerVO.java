@@ -25,4 +25,10 @@ public class ChatAnswerVO implements Serializable {
 
     /** 业务分类,用于前端展示标签 */
     private InsuranceCategoryEnum category;
+
+    /**
+     * 会话服务模式:0-AI 2-人工接入中
+     * <p>人工接入时 answer 为空,前端不应再等待 AI 回复,改为轮询坐席消息</p>
+     */
+    private Integer serviceMode;
 }

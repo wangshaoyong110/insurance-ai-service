@@ -2,6 +2,7 @@ package com.insure.ai.modules.chat.service;
 
 import com.insure.ai.common.PageResult;
 import com.insure.ai.modules.chat.dto.ChatAnswerVO;
+import com.insure.ai.modules.chat.dto.ChatMessageSendDTO;
 import com.insure.ai.modules.chat.dto.ChatMessageVO;
 import com.insure.ai.modules.chat.dto.ChatSendDTO;
 import com.insure.ai.modules.chat.dto.ChatSessionVO;
@@ -41,6 +42,11 @@ public interface ChatService {
     ChatSessionVO createSession(Long cusUserId, String title);
 
     /**
+     * 会话详情(含服务模式,前端据此判断是否需要轮询坐席消息)
+     */
+    ChatSessionVO sessionDetail(Long cusUserId, Long sessionId);
+
+    /**
      * 删除会话(逻辑删除,同时删除会话下的消息)
      */
     void deleteSession(Long cusUserId, Long sessionId);
@@ -55,6 +61,55 @@ public interface ChatService {
      * <p>注意:该方法不整体加事务,避免调用大模型期间长时间占用数据库连接</p>
      */
     ChatAnswerVO send(Long cusUserId, ChatSendDTO dto);
+
+    /* ================= 人工接管(工单与会话打通) ================= */
+
+    /**
+     * 客户发送文字 / 图片 / 视频消息
+     * <p>人工接入中不走大模型;AI 模式下前端仍走流式接口,本方法主要用于媒体消息</p>
+     *
+     * @param dto 消息内容,mediaUrl 必须是本站上传返回的地址
+     */
+    ChatMessageVO sendMessage(Long cusUserId, ChatMessageSendDTO dto);
+
+    /**
+     * 增量拉取会话消息(客户端轮询坐席回复)
+     *
+     * @param afterId 只返回 id 大于该值的消息,首次传 0
+     */
+    List<ChatMessageVO> listMessagesAfter(Long cusUserId, Long sessionId, Long afterId);
+
+    /**
+     * 坐席侧拉取会话消息(无需客户归属校验,由管理端鉴权)
+     */
+    List<ChatMessageVO> adminMessages(Long sessionId, Long afterId);
+
+    /**
+     * 坐席发送消息
+     * <p>必须已接单(会话处于人工接入中)才能发言,避免未接单就插话导致工单状态与会话状态不一致</p>
+     */
+    ChatMessageVO staffSend(Long sessionId, Long operatorId, String operatorName, ChatMessageSendDTO dto);
+
+    /**
+     * 客户提交工单后把会话标记为「排队等人工」,并绑定工单
+     * <p>此阶段 AI 仍可回答,避免客户在排队时干等</p>
+     */
+    void bindTicket(Long cusUserId, Long sessionId, Long ticketId);
+
+    /**
+     * 坐席接单:接管会话,AI 静默,并插入一条系统提示
+     */
+    void takeover(Long sessionId, Long ticketId, Long operatorId, String operatorName);
+
+    /**
+     * 结单:把坐席答复写入会话、插入结束提示,并把会话交回 AI
+     */
+    void finishTakeover(Long sessionId, String reply, String operatorName);
+
+    /**
+     * 工单取消:交回 AI
+     */
+    void cancelTakeover(Long sessionId, String notice);
 
     /**
      * 流式发送消息(SSE)

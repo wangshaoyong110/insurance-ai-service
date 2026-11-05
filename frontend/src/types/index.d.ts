@@ -170,6 +170,12 @@ export interface CusUserInfo {
 export interface ChatSessionItem {
   id: number;
   title: string;
+  /** 服务模式:0-AI自助 1-排队等人工 2-人工接入中 */
+  serviceMode?: number;
+  /** 接管坐席姓名 */
+  handlerName?: string | null;
+  /** 关联工单ID */
+  ticketId?: number | null;
   lastMessage: string;
   messageCount: number;
   lastMessageTime: string;
@@ -180,8 +186,17 @@ export interface ChatSessionItem {
 export interface ChatMessageItem {
   id: number;
   sessionId: number;
-  role: 'user' | 'assistant';
+  /** staff = 人工客服，system = 系统提示 */
+  role: 'user' | 'assistant' | 'staff' | 'system';
+  /** text / image / video / system */
+  msgType?: string;
   content: string;
+  /** 图片/视频地址 */
+  mediaUrl?: string | null;
+  mediaName?: string | null;
+  mediaSize?: number | null;
+  /** 发送者显示名(坐席) */
+  senderName?: string | null;
   createTime: string;
   /**
    * 后端真实消息ID
@@ -198,9 +213,12 @@ export interface ChatMessageItem {
 /** AI 回复结果 */
 export interface ChatAnswer {
   sessionId: number;
-  answer: ChatMessageItem;
+  /** 人工接入时为空,前端不应再等待 AI 回复 */
+  answer?: ChatMessageItem | null;
   references: string[];
   category: string;
+  /** 0-AI 2-人工接入中 */
+  serviceMode?: number;
 }
 
 /** 业务分类 */
@@ -266,6 +284,10 @@ export interface UploadResult {
   url: string;
   name: string;
   size: number;
+  /** image / video / file */
+  type?: string;
+  /** 该业务允许的最大值(便于提示) */
+  limit?: string;
 }
 
 /** 后台首页统计 */

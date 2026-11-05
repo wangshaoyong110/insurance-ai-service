@@ -1,12 +1,13 @@
-import { cusDel, cusGet, cusPost, cusPut } from '@/utils/cusRequest';
+import { cusDel, cusGet, cusPost, cusPut, cusUpload } from '@/utils/cusRequest';
 import { postSse, type SseHandlers } from '@/utils/sse';
-import type { ChatSendParams } from '@/types/api';
+import type { ChatMessageSendParams, ChatSendParams } from '@/types/api';
 import type {
   CategoryItem,
   ChatAnswer,
   ChatMessageItem,
   ChatSessionItem,
   PageResult,
+  UploadResult,
 } from '@/types';
 
 /**
@@ -70,4 +71,27 @@ export function sendMessageStreamApi(
 /** 业务分类(快捷提问) */
 export function getCategoriesApi(): Promise<CategoryItem[]> {
   return cusGet<CategoryItem[]>('/chat/categories');
+}
+
+/** 会话详情(含服务模式,用于判断是否已转人工) */
+export function getSessionDetailApi(id: number): Promise<ChatSessionItem> {
+  return cusGet<ChatSessionItem>(`/chat/sessions/${id}`);
+}
+
+/** 增量拉取消息(轮询坐席回复) */
+export function getMessagesAfterApi(id: number, afterId = 0): Promise<ChatMessageItem[]> {
+  return cusGet<ChatMessageItem[]>(`/chat/sessions/${id}/messages/after`, { params: { afterId } });
+}
+
+/** 发送消息(文字 / 图片 / 视频) */
+export function sendChatMessageApi(data: ChatMessageSendParams): Promise<ChatMessageItem> {
+  return cusPost<ChatMessageItem>('/chat/messages', data, { loading: false });
+}
+
+/**
+ * 上传聊天附件(图片 / 视频)
+ * 视频可能几十 MB,超时时间放宽到 2 分钟
+ */
+export function uploadChatFileApi(file: File): Promise<UploadResult> {
+  return cusUpload<UploadResult>('/file/upload', file, { bizType: 'chat' }, { timeout: 120000 });
 }

@@ -37,8 +37,10 @@ spring:
   # ---------------- 文件上传 ----------------
   servlet:
     multipart:
-      max-file-size: 20MB
-      max-request-size: 50MB
+      # 需大于 insure.upload.max-size:Spring 在进入业务代码前就会拦掉超限请求,
+      # 这里的值若小于业务上限,业务层永远看不到 50MB 的视频
+      max-file-size: 60MB
+      max-request-size: 120MB
   jackson:
     date-format: yyyy-MM-dd HH:mm:ss
     time-zone: Asia/Shanghai
@@ -119,6 +121,15 @@ insure:
     path: ./upload/
     # 访问前缀,与 WebMvcConfig 中资源映射保持一致
     url-prefix: /api/upload/
+    # 全局单文件硬上限:任何业务都不能突破
+    max-size: ${INSURE_UPLOAD_MAX_SIZE:50MB}
+    # 分业务限额(与全局取小):头像必须小、知识库文档可稍大、聊天视频最大
+    biz-limits:
+      avatar: ${INSURE_UPLOAD_AVATAR_LIMIT:2MB}
+      kb: ${INSURE_UPLOAD_KB_LIMIT:20MB}
+      chat-image: ${INSURE_UPLOAD_CHAT_IMAGE_LIMIT:10MB}
+      chat-video: ${INSURE_UPLOAD_CHAT_VIDEO_LIMIT:50MB}
+      common: ${INSURE_UPLOAD_COMMON_LIMIT:20MB}
   security:
     # 可信反向代理 IP:只有 TCP 对端在此列表中才采信 X-Forwarded-For。
     # 默认空 = 一律不信任代理头,防止伪造 IP 绕过限流;

@@ -30,6 +30,18 @@ public class ChatSession extends BaseEntity {
     /** 会话标题 */
     private String title;
 
+    /** 服务模式:0-AI自助 1-排队等人工 2-人工接入中 */
+    private Integer serviceMode;
+
+    /** 接管坐席ID(sys_user.id) */
+    private Long handlerId;
+
+    /** 接管坐席姓名 */
+    private String handlerName;
+
+    /** 关联工单ID(svc_ticket.id) */
+    private Long ticketId;
+
     /** 最后一条消息摘要 */
     private String lastMessage;
 

@@ -3,16 +3,22 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } 
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import {
+  createSessionApi,
   createTicketApi,
   getCategoriesApi,
   getFeedbackReasonsApi,
+  getMessagesAfterApi,
   getMessagesApi,
+  getSessionDetailApi,
   getTicketReasonsApi,
+  sendChatMessageApi,
   sendMessageStreamApi,
   submitFeedbackApi,
+  uploadChatFileApi,
 } from '@/api';
 import { useCusUserStore } from '@/mobile/stores/cusUser';
 import { renderMarkdown } from '@/utils/markdown';
+import { CHAT_IMAGE_ACCEPT, CHAT_VIDEO_ACCEPT, checkUpload, formatFileSize } from '@/utils/uploadLimit';
 import type { CategoryItem, ChatMessageItem, OptionItem } from '@/types';
 
 /**
@@ -46,6 +52,24 @@ const lastCategory = ref<string>('OTHER');
 /** 差评原因 / 转人工原因选项 */
 const feedbackReasons = ref<OptionItem[]>([]);
 const ticketReasons = ref<OptionItem[]>([]);
+
+/** 服务模式:0-AI 1-排队等人工 2-人工接入中 */
+const serviceMode = ref(0);
+/** 接管坐席姓名 */
+const handlerName = ref('');
+/** 是否有人工客服在接手 */
+const isHuman = computed<boolean>(() => serviceMode.value === 2);
+/** 是否已提交工单在排队 */
+const isWaiting = computed<boolean>(() => serviceMode.value === 1);
+/** 附件上传中 */
+const uploading = ref(false);
+/** 隐藏的文件选择框 */
+const imageInput = ref<HTMLInputElement>();
+const videoInput = ref<HTMLInputElement>();
+
+/** 轮询句柄(人工阶段每 3 秒拉一次新消息) */
+let pollTimer = 0;
+let polling = false;
 
 /** 流式请求中断控制器(离开页面时断开,避免后端白跑) */
 let streamController: AbortController | null = null;
@@ -103,6 +127,21 @@ function scheduleScrollToBottom(): void {
 async function handleSend(): Promise<void> {
   const content = input.value.trim();
   if (!content || sending.value) {
+    return;
+  }
+  // 人工接入中:消息直接进会话由坐席回答,不再调用大模型(否则人机同时答话)
+  if (isHuman.value) {
+    sending.value = true;
+    try {
+      const saved = await sendChatMessageApi({ sessionId: sessionId.value, content, msgType: 'text' });
+      messages.value.push(saved);
+      input.value = '';
+      await scrollToBottom();
+    } catch {
+      // 错误提示已由请求拦截器统一处理
+    } finally {
+      sending.value = false;
+    }
     return;
   }
   sending.value = true;
@@ -202,9 +241,129 @@ async function handleQuickAsk(question: string): Promise<void> {
  * 新建会话
  */
 async function startNewSession(): Promise<void> {
+  stopPolling();
+  serviceMode.value = 0;
   sessionId.value = null;
   messages.value = [];
   await router.replace({ path: '/chat' });
+}
+
+/* ---------------- 人工会话:轮询与附件 ---------------- */
+
+/**
+ * 当前已收到的最大服务端消息 ID
+ * <p>本地乐观消息为负数,不能被当作游标</p>
+ */
+function maxServerId(): number {
+  return messages.value.reduce((max, item) => Math.max(max, realMessageId(item) ?? 0), 0);
+}
+
+/**
+ * 拉取增量消息
+ * <p>人工阶段每 3 秒一次:客户不需要手动刷新就能看到坐席回复;
+ * 同时同步服务模式,客服接管/结单后界面立刻切换状态</p>
+ */
+async function pollMessages(): Promise<void> {
+  const id = sessionId.value;
+  if (!id || polling) {
+    return;
+  }
+  polling = true;
+  try {
+    const [detail, list] = await Promise.all([
+      getSessionDetailApi(id),
+      getMessagesAfterApi(id, maxServerId()),
+    ]);
+    const nextMode = detail.serviceMode ?? 0;
+    if (nextMode === 2 && serviceMode.value !== 2) {
+      ElMessage.success(`${detail.handlerName || '人工客服'} 已接入会话`);
+    }
+    serviceMode.value = nextMode;
+    handlerName.value = detail.handlerName ?? '';
+    if (list.length) {
+      const known = new Set(messages.value.filter((item) => item.id > 0).map((item) => item.id));
+      const fresh = list.filter((item) => !known.has(item.id));
+      if (fresh.length) {
+        messages.value.push(...fresh);
+        await scrollToBottom();
+      }
+    }
+    // 人工服务已结束且没有排队单:停止轮询,避免页面空转
+    if (nextMode === 0) {
+      stopPolling();
+    }
+  } catch {
+    // 轮询失败静默处理,下一轮继续
+  } finally {
+    polling = false;
+  }
+}
+
+function startPolling(): void {
+  if (pollTimer) {
+    return;
+  }
+  pollTimer = window.setInterval(() => {
+    void pollMessages();
+  }, 3000);
+}
+
+function stopPolling(): void {
+  if (pollTimer) {
+    window.clearInterval(pollTimer);
+    pollTimer = 0;
+  }
+}
+
+/**
+ * 打开文件选择框
+ */
+function pickMedia(kind: 'image' | 'video'): void {
+  if (uploading.value) {
+    return;
+  }
+  (kind === 'image' ? imageInput.value : videoInput.value)?.click();
+}
+
+/**
+ * 选择文件后上传并发送
+ */
+async function handleFileChange(event: Event, kind: 'image' | 'video'): Promise<void> {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  // 清空 value,否则连续选同一个文件不会再触发 change
+  input.value = '';
+  if (!file) {
+    return;
+  }
+  const error = checkUpload(file, kind === 'image' ? 'chat-image' : 'chat-video');
+  if (error) {
+    ElMessage.warning(error);
+    return;
+  }
+  uploading.value = true;
+  try {
+    // 新会话还没有 sessionId:先建一个空会话,否则附件无处可挂
+    if (!sessionId.value) {
+      const session = await createSessionApi(kind === 'image' ? '图片咨询' : '视频咨询');
+      sessionId.value = session.id;
+    }
+    const uploaded = await uploadChatFileApi(file);
+    const saved = await sendChatMessageApi({
+      sessionId: sessionId.value,
+      msgType: kind,
+      mediaUrl: uploaded.url,
+      mediaName: uploaded.name,
+      mediaSize: uploaded.size,
+      content: '',
+    });
+    messages.value.push(saved);
+    await scrollToBottom();
+  } catch {
+    // 上传失败的提示由拦截器统一处理
+  } finally {
+    uploading.value = false;
+  }
 }
 
 /* ---------------- 回答评价 ---------------- */
@@ -319,12 +478,15 @@ async function submitTicket(): Promise<void> {
       reason: ticketDialog.reason,
     });
     ticketDialog.visible = false;
+    // 会话转入排队:开始轮询,坐席接单后客户无需刷新就能在这里看到回复
+    serviceMode.value = 1;
+    startPolling();
     // 在对话流里留一条本地提示：客户提交完立刻能看到工单号，心里有底
     messages.value.push({
       id: -Date.now(),
       sessionId: sessionId.value ?? 0,
       role: 'assistant',
-      content: `已为你转接人工客服，工单号 ${ticket.ticketNo}。坐席会在工作时间内尽快联系你，也可以在「我的 - 我的工单」查看处理进度。`,
+      content: `已为你转接人工客服，工单号 ${ticket.ticketNo}。客服接入后会在这个会话里直接回复你，也可以在「我的 - 我的工单」查看进度。`,
       createTime: new Date().toISOString(),
       notice: true,
     });
@@ -351,8 +513,17 @@ async function loadHistory(id: number): Promise<void> {
   loadingHistory.value = true;
   try {
     const page = await getMessagesApi(id);
-    messages.value = page.records.filter((item) => String(item.role) !== 'system');
+    // 系统提示(客服已接入/服务已结束)也要展示,客户才知道现在是谁在回答
+    messages.value = page.records;
     sessionId.value = id;
+    const detail = await getSessionDetailApi(id);
+    serviceMode.value = detail.serviceMode ?? 0;
+    handlerName.value = detail.handlerName ?? '';
+    if (serviceMode.value > 0) {
+      startPolling();
+    } else {
+      stopPolling();
+    }
     await scrollToBottom();
   } finally {
     loadingHistory.value = false;
@@ -403,6 +574,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   // 主动断开 SSE，避免用户离开后后端继续生成、白白消耗 token
   streamController?.abort();
+  stopPolling();
   if (scrollTimer) {
     window.clearTimeout(scrollTimer);
   }
@@ -461,61 +633,90 @@ onBeforeUnmount(() => {
 
       <!-- 消息列表 -->
       <div v-else class="message-list">
-        <div v-for="item in messages" :key="item.id" class="message" :class="`message--${item.role}`">
-          <div class="message__avatar">
-            <el-icon v-if="item.role === 'assistant'"><Service /></el-icon>
-            <el-icon v-else><User /></el-icon>
-          </div>
-          <div class="message__bubble" :class="{ 'message__bubble--typing': item.id === streamingPlaceholderId && !item.content }">
-            <!-- 首字到达前显示打字动画；一旦有内容就切到正文，实现逐字出现 -->
-            <div v-if="item.id === streamingPlaceholderId && !item.content" class="typing-dots">
-              <span></span><span></span><span></span>
+        <template v-for="item in messages" :key="item.id">
+          <!-- 系统提示(客服接入/服务结束)居中展示，不占气泡 -->
+          <p v-if="item.role === 'system'" class="system-tip">{{ item.content }}</p>
+          <div v-else class="message" :class="`message--${item.role}`">
+            <div class="message__avatar">
+              <el-icon v-if="item.role === 'assistant'"><Service /></el-icon>
+              <el-icon v-else-if="item.role === 'staff'"><Headset /></el-icon>
+              <el-icon v-else><User /></el-icon>
             </div>
-            <template v-else>
-              <!-- 客户输入按纯文本展示；AI 回答渲染轻量 Markdown，否则 **加粗** 会带一串星号 -->
-              <p v-if="item.role === 'user'" class="message__content">{{ item.content }}</p>
-              <div
-                v-else
-                class="message__content message__content--md"
-                v-html="renderMarkdown(item.content)"
-              ></div>
-
-              <!-- 回答评价：AI 回复生成完成后才出现，转人工提示等本地消息不参与评价 -->
-              <div
-                v-if="
-                  item.role === 'assistant' &&
-                  !item.notice &&
-                  item.content &&
-                  item.id !== streamingPlaceholderId
-                "
-                class="message__actions"
-              >
-                <template v-if="item.feedback === undefined">
-                  <span class="message__ask">这个回答有用吗？</span>
-                  <button type="button" class="rate-btn" @click="rateAnswer(item, 1)">
-                    <el-icon><CaretTop /></el-icon>有用
-                  </button>
-                  <button type="button" class="rate-btn" @click="rateAnswer(item, 0)">
-                    <el-icon><CaretBottom /></el-icon>没用
-                  </button>
-                </template>
-                <span v-else class="message__rated">
-                  {{ item.feedback === 1 ? '已反馈：有用' : '已反馈：没用，我们会改进' }}
-                </span>
+            <div class="message__bubble" :class="{ 'message__bubble--typing': item.id === streamingPlaceholderId && !item.content }">
+              <!-- 首字到达前显示打字动画；一旦有内容就切到正文，实现逐字出现 -->
+              <div v-if="item.id === streamingPlaceholderId && !item.content" class="typing-dots">
+                <span></span><span></span><span></span>
               </div>
-            </template>
+              <template v-else>
+                <p v-if="item.role === 'staff'" class="message__sender">
+                  {{ item.senderName || '人工客服' }}
+                </p>
+                <!-- 图片/视频消息单独渲染；content 仅作为说明文字，不额外占一行 -->
+                <el-image
+                  v-if="item.msgType === 'image' && item.mediaUrl"
+                  :src="item.mediaUrl"
+                  :preview-src-list="[item.mediaUrl]"
+                  fit="cover"
+                  preview-teleported
+                  class="message__image"
+                />
+                <video
+                  v-else-if="item.msgType === 'video' && item.mediaUrl"
+                  :src="item.mediaUrl"
+                  class="message__video"
+                  controls
+                  playsinline
+                ></video>
+                <!-- 客户输入按纯文本展示；AI 与坐席回复渲染轻量 Markdown，否则 **加粗** 会带一串星号 -->
+                <p v-else-if="item.role === 'user'" class="message__content">{{ item.content }}</p>
+                <div
+                  v-else
+                  class="message__content message__content--md"
+                  v-html="renderMarkdown(item.content)"
+                ></div>
+                <span v-if="item.mediaSize" class="message__size">{{ formatFileSize(item.mediaSize) }}</span>
+
+                <!-- 回答评价：AI 回复生成完成后才出现，转人工提示等本地消息不参与评价 -->
+                <div
+                  v-if="
+                    item.role === 'assistant' &&
+                    !item.notice &&
+                    item.content &&
+                    item.id !== streamingPlaceholderId
+                  "
+                  class="message__actions"
+                >
+                  <template v-if="item.feedback === undefined">
+                    <span class="message__ask">这个回答有用吗？</span>
+                    <button type="button" class="rate-btn" @click="rateAnswer(item, 1)">
+                      <el-icon><CaretTop /></el-icon>有用
+                    </button>
+                    <button type="button" class="rate-btn" @click="rateAnswer(item, 0)">
+                      <el-icon><CaretBottom /></el-icon>没用
+                    </button>
+                  </template>
+                  <span v-else class="message__rated">
+                    {{ item.feedback === 1 ? '已反馈：有用' : '已反馈：没用，我们会改进' }}
+                  </span>
+                </div>
+              </template>
+            </div>
           </div>
-        </div>
+        </template>
       </div>
     </main>
 
-    <!-- 转人工入口：AI 答不了时给客户一条明确的出路 -->
+    <!-- 转人工入口：AI 答不了时给客户一条明确的出路；已转人工则显示当前对接状态 -->
     <div class="service-bar">
       <span class="service-bar__text">
         <el-icon><Headset /></el-icon>
-        问题还没解决？
+        <template v-if="isHuman">{{ handlerName || '人工客服' }} 正在与你沟通</template>
+        <template v-else-if="isWaiting">已提交工单，正在等待客服接入</template>
+        <template v-else>问题还没解决？</template>
       </span>
-      <button type="button" class="service-bar__btn" @click="openTicket">转人工客服</button>
+      <button v-if="serviceMode === 0" type="button" class="service-bar__btn" @click="openTicket">
+        转人工客服
+      </button>
       <button type="button" class="service-bar__link" @click="router.push('/tickets')">
         我的工单
       </button>
@@ -523,12 +724,47 @@ onBeforeUnmount(() => {
 
     <!-- 输入区 -->
     <footer class="chat-composer">
+      <!-- 图片/视频入口:人工沟通时客户常需要补拍理赔材料、截图说明问题 -->
+      <div class="chat-composer__tools">
+        <button
+          type="button"
+          class="composer-tool"
+          :disabled="uploading"
+          title="发送图片"
+          @click="pickMedia('image')"
+        >
+          <el-icon :size="19"><Picture /></el-icon>
+        </button>
+        <button
+          type="button"
+          class="composer-tool"
+          :disabled="uploading"
+          title="发送视频"
+          @click="pickMedia('video')"
+        >
+          <el-icon :size="19"><VideoCamera /></el-icon>
+        </button>
+        <input
+          ref="imageInput"
+          type="file"
+          hidden
+          :accept="CHAT_IMAGE_ACCEPT"
+          @change="handleFileChange($event, 'image')"
+        />
+        <input
+          ref="videoInput"
+          type="file"
+          hidden
+          :accept="CHAT_VIDEO_ACCEPT"
+          @change="handleFileChange($event, 'video')"
+        />
+      </div>
       <textarea
         v-model="input"
         class="chat-composer__input"
         rows="1"
         maxlength="500"
-        placeholder="请输入你的问题,例如:退保能退多少钱?"
+        :placeholder="isHuman ? '输入消息，客服会在这里回复你' : '请输入你的问题,例如:退保能退多少钱?'"
         @keydown="handleKeydown"
       />
       <button
@@ -818,6 +1054,48 @@ onBeforeUnmount(() => {
     }
   }
 
+  /* 人工客服:与 AI 视觉区分,客户一眼能看出"现在是真人在回" */
+  &--staff {
+    .message__avatar {
+      background: #e6f7ef;
+      color: #0f9d58;
+    }
+
+    .message__bubble {
+      background: #f4fbf7;
+      border: 1px solid #d8f0e2;
+    }
+  }
+
+  &__sender {
+    margin-bottom: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    color: #0f9d58;
+  }
+
+  &__image {
+    display: block;
+    width: 200px;
+    max-height: 220px;
+    border-radius: 10px;
+  }
+
+  &__video {
+    display: block;
+    width: 220px;
+    max-height: 260px;
+    border-radius: 10px;
+    background: #000;
+  }
+
+  &__size {
+    display: block;
+    margin-top: 4px;
+    font-size: 11px;
+    opacity: 0.7;
+  }
+
   &__bubble--typing {
     padding: 15px 16px;
   }
@@ -897,6 +1175,20 @@ onBeforeUnmount(() => {
     transform: translateY(-4px);
     opacity: 1;
   }
+}
+
+/* 系统提示:客服接入 / 服务结束,居中灰条 */
+.system-tip {
+  align-self: center;
+  max-width: 88%;
+  margin: 2px auto;
+  padding: 6px 12px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #667085;
+  text-align: center;
+  background: #eef1f6;
+  border-radius: 12px;
 }
 
 /* ---------------- 转人工入口 ---------------- */
@@ -989,6 +1281,13 @@ onBeforeUnmount(() => {
   background: #fff;
   border-top: 1px solid #eef1f6;
 
+  &__tools {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding-bottom: 3px;
+  }
+
   &__input {
     flex: 1;
     max-height: 96px;
@@ -1028,6 +1327,29 @@ onBeforeUnmount(() => {
       opacity: 0.45;
       box-shadow: none;
     }
+  }
+}
+
+/* 附件按钮 */
+.composer-tool {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 38px;
+  color: #667085;
+  background: none;
+  border: none;
+  border-radius: 10px;
+  cursor: pointer;
+
+  &:active {
+    color: #1b5faa;
+    background: #eef5ff;
+  }
+
+  &:disabled {
+    opacity: 0.4;
   }
 }
 </style>

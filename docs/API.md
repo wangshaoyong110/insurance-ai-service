@@ -156,9 +156,12 @@
 | GET | `/chat/categories` | 业务分类与示例问题 | - |
 | GET | `/chat/sessions` | 当前客户历史会话列表 | - |
 | POST | `/chat/sessions` | 新建空会话 | query: `title?` |
+| GET | `/chat/sessions/{id}` | 会话详情（含 `serviceMode`，人工接入后前端据此切换轮询模式） | - |
 | PUT | `/chat/sessions/{id}` | 重命名会话 | query: `title` |
 | DELETE | `/chat/sessions/{id}` | 删除会话（逻辑删除，级联消息） | - |
 | GET | `/chat/sessions/{id}/messages` | 会话消息分页（从最新往回翻） | query: `pageNum=1`, `pageSize=50`（上限 200） |
+| GET | `/chat/sessions/{id}/messages/after` | 增量拉取消息（人工模式下轮询坐席回复） | query: `afterId?`（只返回 id 更大的消息，首次传 0） |
+| POST | `/chat/messages` | 发送消息（文字 / 图片 / 视频；人工接入时发文字不触发 AI） | body: `{ sessionId, content?, msgType, mediaUrl?, mediaName?, mediaSize? }` |
 | POST | `/chat/send` | 发送消息并获取 AI 回复（同步） | body: `{ sessionId?, content }` |
 | POST | `/chat/send/stream` | 发送消息并流式返回（SSE） | body: `{ sessionId?, content }` |
 
@@ -225,6 +228,17 @@ data:{"sessionId":10,"messageId":21,"model":"deepseek-chat","createTime":"2026-1
 > 用 `fetch` + `ReadableStream`，参考 `frontend/src/utils/sse.ts`。
 > 反向代理必须对该响应关闭缓冲（`proxy_buffering off`），否则会退化为一次性返回。
 
+### 媒体消息与人工接入模式
+
+消息体在原 `role/content` 基础上扩展了 `msgType`（`text` / `image` / `video` / `system`）、
+`mediaUrl`、`mediaName`、`mediaSize`、`senderName` 字段；`role` 新增 `staff`（坐席）。
+
+- **发送流程**：图片 / 视频先 `POST /file/upload`（`bizType=chat`）拿到 `url`，再 `POST /chat/messages` 发消息，避免把二进制塞进 JSON。
+- **人工接入后 AI 自动沉默**：会话 `serviceMode=2`（人工）时，`/chat/send` 与 `/chat/send/stream` 不再调用大模型——客户在同一个窗口继续发文字，由坐席回复；前端改为轮询 `messages/after` 拉取坐席消息（含图片 / 视频）。
+- `serviceMode`：`0` AI 问答（默认）、`1` 排队中（客户刚提交转人工工单）、`2` 人工服务中（坐席已接单）。
+- 结单后 `serviceMode` 回到 `0`，会话内落一条 `system` 消息（「人工服务已结束…」），客户可继续与 AI 对话。
+- `/chat/messages` 限流 **20 次/分钟**。
+
 ## 四、服务闭环 `/service`（客户端）
 
 AI 答得好不好、答不了怎么办，这两件事都要有出口。
@@ -254,6 +268,19 @@ AI 答得好不好、答不了怎么办，这两件事都要有出口。
 | GET | `/admin/ticket/statistics` | 待处理 / 处理中 / 已完成 / 今日新增 / 人工接手率 | - |
 
 `handle` 的状态流转：`1` 处理中（记录当前登录坐席与接单时间）→ `2` 已完成（写入回复与结单时间）→ `3` 已取消。客户在手机端「我的工单」可见坐席回复。
+
+**接单即接管会话**：接单（`status=1`）会把客户提交工单时关联（或自动新建）的 `chat_session` 置为人工模式（`serviceMode=2`，记录 `handlerId/handlerName/ticketId`），并向会话内落一条 `system` 消息告知客户「坐席已接入」；结单 / 取消时释放会话回到 AI 模式。**坐席与客户在同一个聊天窗口沟通**，能完整看到客户与 AI 的历史对话上下文。
+
+### 坐席会话 `/admin/chat`（接单后使用）
+
+| 方法 | 路径 | 说明 | 参数 |
+| --- | --- | --- | --- |
+| GET | `/admin/chat/sessions/{sessionId}/messages` | 会话消息（首次返回最近 200 条，含客户与 AI 的完整上下文） | query: `afterId?`（增量轮询） |
+| POST | `/admin/chat/sessions/{sessionId}/send` | 坐席发送消息（文字 / 图片 / 视频） | body: `{ content?, msgType, mediaUrl?, mediaName?, mediaSize? }` |
+
+- 必须已接单才能发言（未接单发言会让工单与会话状态错位）。
+- 消息的 `role=staff`，`senderName` 为坐席姓名，客户端轮询可正常收到。
+- 图片 / 视频同样先走 `POST /file/upload`（`bizType=chat`）再发消息。
 
 ## 六、后台-回答评价 `/admin/feedback`
 
@@ -347,9 +374,22 @@ AI 答得好不好、答不了怎么办，这两件事都要有出口。
 
 | 方法 | 路径 | 说明 | 参数 |
 | --- | --- | --- | --- |
-| POST | `/file/upload` | 上传文件 | form-data: `file`，query: `bizType?` |
+| POST | `/file/upload` | 上传文件 | form-data: `file`，query: `bizType?`（`avatar` / `kb` / `chat` / `common`） |
 
-允许扩展名：`jpg/jpeg/png/gif/webp/bmp/pdf/doc/docx/xls/xlsx/ppt/pptx/txt/csv`；单文件上限 20MB。
+允许扩展名：`jpg/jpeg/png/gif/webp/bmp/pdf/doc/docx/xls/xlsx/ppt/pptx/txt/csv/mp4/mov/m4v/webm/ogv`；
+图片与视频还会做**魔数（文件头）校验**，改后缀伪装的假图片 / 假视频直接拒绝（`2002`）；超大小限制返回 `2003`，错误信息中会给出该业务实际生效的限额（如「聊天图片最大 10MB」）。
+
+**大小限制分两层，取更小者生效**：
+
+| 层级 | 配置 | 默认值 |
+| --- | --- | --- |
+| 全局硬上限 | `INSURE_UPLOAD_MAX_SIZE` | 50MB |
+| 头像 `bizType=avatar` | `INSURE_UPLOAD_AVATAR_LIMIT` | 2MB |
+| 知识库 `bizType=kb` | `INSURE_UPLOAD_KB_LIMIT` | 20MB |
+| 聊天图片（`bizType=chat` + 图片扩展名） | `INSURE_UPLOAD_CHAT_IMAGE_LIMIT` | 10MB |
+| 聊天视频（`bizType=chat` + 视频扩展名） | `INSURE_UPLOAD_CHAT_VIDEO_LIMIT` | 50MB |
+| 其他 `bizType=common` | `INSURE_UPLOAD_COMMON_LIMIT` | 20MB |
+
 响应 `data`：`{ id, url, name, size }`，`url` 形如 `/api/upload/20261104/xxxx.png`。
 
 ## 十五、后台-概览 `/admin/dashboard`
@@ -528,6 +568,27 @@ curl -s -X PUT http://localhost:8080/api/admin/ticket/1/handle \
 curl -s -X PUT http://localhost:8080/api/admin/ticket/1/handle \
   -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" \
   -d '{"status":2,"reply":"您的保单已过等待期"}'
+
+# ---------- 人工接管会话(接单后) ----------
+# 坐席查看会话上下文(含客户与 AI 的完整历史)
+curl -s "http://localhost:8080/api/admin/chat/sessions/20/messages" -H "Authorization: Bearer $ADMIN_TOKEN"
+
+# 坐席发文字(消息 role=staff,客户轮询可见;此时 AI 不再作答)
+curl -s -X POST http://localhost:8080/api/admin/chat/sessions/20/send \
+  -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" \
+  -d '{"msgType":"text","content":"您好,我是坐席小王,为您服务"}'
+
+# 坐席发图片:先上传(11MB 会被聊天图片 10MB 限额拒绝,超限返回 2003)
+curl -s -X POST "http://localhost:8080/api/file/upload?bizType=chat" \
+  -H "Authorization: Bearer $ADMIN_TOKEN" -F "file=@claim-form.png"
+# 拿到 data.url 后发图片消息
+curl -s -X POST http://localhost:8080/api/admin/chat/sessions/20/send \
+  -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" \
+  -d '{"msgType":"image","mediaUrl":"/api/upload/20261105/xxx.png","mediaName":"claim-form.png","mediaSize":204800}'
+
+# 客户端轮询坐席回复(含图片/视频)
+curl -s "http://localhost:8080/api/chat/sessions/20/messages/after?afterId=0" \
+  -H "Authorization: Bearer $CUS_TOKEN"
 
 # 好评率 / 工单待办
 curl -s http://localhost:8080/api/admin/feedback/statistics -H "Authorization: Bearer $ADMIN_TOKEN"

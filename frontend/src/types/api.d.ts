@@ -175,6 +175,17 @@ export interface ChatSendParams {
   content: string;
 }
 
+/** 会话消息发送参数(文字 / 图片 / 视频) */
+export interface ChatMessageSendParams {
+  sessionId?: number | null;
+  content?: string;
+  /** text / image / video */
+  msgType?: string;
+  mediaUrl?: string;
+  mediaName?: string;
+  mediaSize?: number;
+}
+
 /* ---------------- 知识库 ---------------- */
 
 /** 知识库查询参数 */
