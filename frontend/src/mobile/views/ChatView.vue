@@ -170,6 +170,7 @@ async function handleSend(): Promise<void> {
   await scrollToBottom();
 
   let failed = false;
+  let blockedByRealName = false;
   const controller = new AbortController();
   streamController = controller;
 
@@ -182,6 +183,10 @@ async function handleSend(): Promise<void> {
           sessionId.value = meta.sessionId;
           if (meta.category) {
             lastCategory.value = meta.category;
+          }
+          // 未实名:后端直接用引导话术代替 AI 回答,消息气泡下要给"去实名认证"入口
+          if (meta.needRealName) {
+            blockedByRealName = true;
           }
         },
         onDelta: (text) => {
@@ -226,6 +231,12 @@ async function handleSend(): Promise<void> {
       (item) => item.id !== placeholderId && item.id !== localUserMessage.id,
     );
     input.value = content;
+  } else if (blockedByRealName) {
+    // 标记这条回复是实名引导,渲染「去实名认证」按钮
+    const item = messages.value[placeholderIndex];
+    if (item) {
+      item.needRealName = true;
+    }
   }
 }
 
@@ -699,6 +710,17 @@ onBeforeUnmount(() => {
                     {{ item.feedback === 1 ? '已反馈：有用' : '已反馈：没用，我们会改进' }}
                   </span>
                 </div>
+
+                <!-- 未实名客户问及本人业务数据:一键去认证 -->
+                <button
+                  v-if="item.needRealName"
+                  type="button"
+                  class="realname-btn"
+                  @click="router.push('/realname')"
+                >
+                  <el-icon :size="14"><Postcard /></el-icon>
+                  去实名认证
+                </button>
               </template>
             </div>
           </div>
@@ -1133,11 +1155,29 @@ onBeforeUnmount(() => {
   border: 1px solid transparent;
   border-radius: 20px;
   cursor: pointer;
-
   &:active {
     color: #1b5faa;
     border-color: rgba(27, 95, 170, 0.35);
     background: #eef5ff;
+  }
+}
+
+/* 未实名引导按钮:蓝色实心,比评价按钮更醒目,引导动作明确 */
+.realname-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 8px;
+  padding: 6px 12px;
+  font-size: 12px;
+  color: #fff;
+  background: linear-gradient(135deg, #1b5faa, #3f8ed0);
+  border: none;
+  border-radius: 20px;
+  cursor: pointer;
+
+  &:active {
+    opacity: 0.86;
   }
 }
 

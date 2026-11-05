@@ -93,7 +93,10 @@ public enum ResultCode {
     CAPTCHA_EXPIRED(4013, "图形验证码已失效,请点击图片刷新"),
     CAPTCHA_SCENE_ERROR(4014, "图形验证码场景不正确"),
     CAPTCHA_NOT_VERIFIED(4015, "请先完成图形验证码校验并获取短信验证码"),
-    CAPTCHA_PHONE_MISMATCH(4016, "图形验证码与手机号不匹配,请重新获取");
+    CAPTCHA_PHONE_MISMATCH(4016, "图形验证码与手机号不匹配,请重新获取"),
+    CERT_TYPE_NOT_ALLOWED(4017, "不支持的证件类型"),
+    CERT_NO_FORMAT_ERROR(4018, "证件号格式不正确,请核对后重新填写"),
+    REAL_NAME_INFO_MISMATCH(4019, "姓名与证件号不一致,实名认证失败");
 
     /** 状态码 */
     private final Integer code;

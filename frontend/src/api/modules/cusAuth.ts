@@ -1,9 +1,12 @@
 import { cusGet, cusPost, cusPut } from '@/utils/cusRequest';
 import type {
   CaptchaResult,
+  CertificateTypeOption,
   ChangePasswordParams,
   CusLoginResult,
+  CusProfileUpdateParams,
   LoginParams,
+  RealNameAuthParams,
   RegisterParams,
   SmsCodeResult,
   SmsSendParams,
@@ -50,7 +53,17 @@ export function changeCusPasswordApi(data: ChangePasswordParams): Promise<void> 
   return cusPut<void>('/auth/password', data);
 }
 
-/** 修改个人资料 */
-export function updateCusProfileApi(nickname?: string, email?: string): Promise<CusUserInfo> {
-  return cusPut<CusUserInfo>('/auth/profile', undefined, { params: { nickname, email } });
+/** 修改个人资料(只传需要改的字段) */
+export function updateCusProfileApi(data: CusProfileUpdateParams): Promise<CusUserInfo> {
+  return cusPut<CusUserInfo>('/auth/profile', data);
+}
+
+/** 实名认证(姓名 + 证件类型 + 证件号) */
+export function realNameAuthApi(data: RealNameAuthParams): Promise<CusUserInfo> {
+  return cusPost<CusUserInfo>('/auth/real-name', data);
+}
+
+/** 证件类型字典 */
+export function getCertTypesApi(): Promise<CertificateTypeOption[]> {
+  return cusGet<CertificateTypeOption[]>('/auth/cert-types');
 }

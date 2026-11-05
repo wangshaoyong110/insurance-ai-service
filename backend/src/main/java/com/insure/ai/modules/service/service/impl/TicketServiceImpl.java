@@ -14,6 +14,7 @@ import com.insure.ai.modules.service.dto.TicketHandleDTO;
 import com.insure.ai.modules.service.dto.TicketQuery;
 import com.insure.ai.modules.service.entity.ServiceTicket;
 import com.insure.ai.modules.service.mapper.ServiceTicketMapper;
+import com.insure.ai.modules.service.support.TicketExcelExporter;
 import com.insure.ai.modules.system.entity.CusUser;
 import com.insure.ai.modules.system.mapper.CusUserMapper;
 import lombok.RequiredArgsConstructor;
@@ -141,7 +142,44 @@ public class TicketServiceImpl implements TicketService {
             }
         }
         Page<ServiceTicket> page = new Page<>(query.getPageNum(), query.getPageSize());
-        ticketMapper.selectPage(page, Wrappers.<ServiceTicket>lambdaQuery()
+        ticketMapper.selectPage(page, buildQueryWrapper(query, customerIds));
+        PageResult<ServiceTicket> result = PageResult.of(page, item -> item);
+        fillCustomer(result.getRecords());
+        return result;
+    }
+
+    /**
+     * 按当前筛选条件导出 Excel
+     * <p>条件与列表页完全一致(工单号/状态/原因/客户/时间),导出的是"看到什么就导出什么";
+     * 不分页,但受 {@link TicketExcelExporter#MAX_ROWS} 上限保护。</p>
+     */
+    @Override
+    public byte[] exportExcel(TicketQuery query) {
+        List<Long> customerIds = null;
+        if (StringUtils.hasText(query.getCustomer())) {
+            customerIds = matchCustomerIds(query.getCustomer());
+            if (customerIds.isEmpty()) {
+                return TicketExcelExporter.write(List.of());
+            }
+        }
+        // searchCount=false:导出不需要总数,省一次 count 查询
+        Page<ServiceTicket> page = new Page<>(1, TicketExcelExporter.MAX_ROWS, false);
+        ticketMapper.selectPage(page, buildQueryWrapper(query, customerIds));
+        List<ServiceTicket> records = page.getRecords();
+        fillCustomer(records);
+        log.info("[工单] 导出 Excel 条数={} 条件: ticketNo={} status={} reason={} customer={} 区间={}~{}",
+                records.size(), query.getTicketNo(), query.getStatus(), query.getReason(),
+                query.getCustomer(), query.getStartDate(), query.getEndDate());
+        return TicketExcelExporter.write(records);
+    }
+
+    /**
+     * 组装列表与导出共用的查询条件
+     * <p>两处若各写一份,迟早出现"列表筛了导出没筛"的对不上问题</p>
+     */
+    private com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<ServiceTicket> buildQueryWrapper(
+            TicketQuery query, List<Long> customerIds) {
+        return Wrappers.<ServiceTicket>lambdaQuery()
                 .like(StringUtils.hasText(query.getTicketNo()), ServiceTicket::getTicketNo, query.getTicketNo())
                 .eq(query.getStatus() != null, ServiceTicket::getStatus, query.getStatus())
                 .eq(StringUtils.hasText(query.getReason()), ServiceTicket::getReason, query.getReason())
@@ -153,10 +191,7 @@ public class TicketServiceImpl implements TicketService {
                 // 待处理优先,其次按紧急程度与新单时间,坐席打开列表即可看到最该先动手的
                 .orderByAsc(ServiceTicket::getStatus)
                 .orderByDesc(ServiceTicket::getPriority)
-                .orderByDesc(ServiceTicket::getId));
-        PageResult<ServiceTicket> result = PageResult.of(page, item -> item);
-        fillCustomer(result.getRecords());
-        return result;
+                .orderByDesc(ServiceTicket::getId);
     }
 
     /**

@@ -1,9 +1,11 @@
 package com.insure.ai.modules.system.service;
 
 import com.insure.ai.modules.system.dto.ChangePasswordDTO;
+import com.insure.ai.modules.system.dto.CusProfileUpdateDTO;
 import com.insure.ai.modules.system.dto.CusUserVO;
 import com.insure.ai.modules.system.dto.LoginDTO;
 import com.insure.ai.modules.system.dto.LoginVO;
+import com.insure.ai.modules.system.dto.RealNameAuthDTO;
 import com.insure.ai.modules.system.dto.RegisterDTO;
 import jakarta.servlet.http.HttpServletRequest;
 
@@ -45,7 +47,15 @@ public interface CusAuthService {
     void changePassword(Long cusUserId, ChangePasswordDTO dto);
 
     /**
-     * 更新个人资料(仅允许修改昵称与邮箱,手机号需通过客服变更)
+     * 更新个人资料:昵称 / 邮箱 / 头像 / 性别 / 生日 / 姓名 / 证件信息
+     * <p>手机号是登录凭证,不允许自行修改;证件号只做格式校验,不出现在返回的明文里</p>
      */
-    CusUserVO updateProfile(Long cusUserId, String nickname, String email);
+    CusUserVO updateProfile(Long cusUserId, CusProfileUpdateDTO dto);
+
+    /**
+     * 实名认证:姓名 + 证件类型 + 证件号
+     * <p>校验证件格式后把客户标记为已实名;认证成功后查保单/理赔不再受限。
+     * 真实二要素核验通道未接入时由 mock 开关控制(见实现类 TODO)。</p>
+     */
+    CusUserVO realNameAuth(Long cusUserId, RealNameAuthDTO dto);
 }

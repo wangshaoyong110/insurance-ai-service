@@ -28,6 +28,14 @@ export function getTicketStatisticsApi(): Promise<TicketStatistics> {
   return get<TicketStatistics>('/admin/ticket/statistics');
 }
 
+/**
+ * 按当前筛选条件导出工单 Excel
+ * <p>responseType=blob:响应拦截器对二进制流直接透传,拿到的是 xlsx 的 Blob</p>
+ */
+export function exportTicketExcelApi(params: TicketQueryParams): Promise<Blob> {
+  return get<Blob>('/admin/ticket/export', params, { responseType: 'blob', timeout: 120000 });
+}
+
 /* ---------------- 评价 ---------------- */
 
 /** 评价分页(差评优先) */

@@ -11,6 +11,9 @@ import com.insure.ai.modules.service.service.TicketService;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -19,6 +22,10 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
 import java.util.Map;
 
 /**
@@ -41,6 +48,25 @@ public class AdminTicketController {
     @GetMapping("/page")
     public Result<PageResult<ServiceTicket>> page(TicketQuery query) {
         return Result.success(ticketService.page(query));
+    }
+
+    /**
+     * 按当前筛选条件导出 Excel
+     * <p>返回二进制流而不是 JSON:文件名用 RFC 5987 的 {@code filename*=UTF-8''} 形式,
+     * 中文名在 Chrome/Edge/Firefox 下都能正确落地,不用再拼 URLEncoder 的 + 号问题。</p>
+     */
+    @Log(module = "服务工单", operation = "导出工单")
+    @GetMapping("/export")
+    public ResponseEntity<byte[]> export(TicketQuery query) {
+        byte[] data = ticketService.exportExcel(query);
+        String fileName = "服务工单_" + LocalDate.now().format(DateTimeFormatter.BASIC_ISO_DATE) + ".xlsx";
+        String encoded = URLEncoder.encode(fileName, StandardCharsets.UTF_8).replace("+", "%20");
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename*=UTF-8''" + encoded)
+                .contentType(MediaType.parseMediaType(
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+                .contentLength(data.length)
+                .body(data);
     }
 
     /**

@@ -1,11 +1,18 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue';
+import { computed, onMounted, reactive, ref } from 'vue';
 import { useRouter } from 'vue-router';
-import { changeCusPasswordApi, updateCusProfileApi } from '@/api';
+import {
+  changeCusPasswordApi,
+  getCertTypesApi,
+  updateCusProfileApi,
+} from '@/api';
+import { uploadFileApi } from '@/api/modules/file';
 import { useCusUserStore } from '@/mobile/stores/cusUser';
+import type { CertificateTypeOption } from '@/types/api';
+import { checkUpload } from '@/utils/uploadLimit';
 
 /**
- * 我的:个人资料、密码安全与隐私说明
+ * 我的:头像、个人资料、实名认证、密码安全与隐私说明
  */
 const router = useRouter();
 const cusUserStore = useCusUserStore();
@@ -15,19 +22,82 @@ const passwordVisible = ref(false);
 const privacyVisible = ref(false);
 const aboutVisible = ref(false);
 const saving = ref(false);
+const avatarUploading = ref(false);
+const avatarInput = ref<HTMLInputElement | null>(null);
 
 /** 资料表单 */
-const profileForm = reactive({ nickname: '', email: '' });
+const profileForm = reactive({
+  nickname: '',
+  email: '',
+  realName: '',
+  gender: 0,
+  birthday: '',
+  certType: '',
+  certNo: '',
+});
 /** 密码表单 */
 const passwordForm = reactive({ oldPassword: '', newPassword: '', confirmPassword: '' });
+/** 证件类型字典 */
+const certTypes = ref<CertificateTypeOption[]>([]);
+
+/** 是否已实名 */
+const verified = computed<boolean>(() => cusUserStore.userInfo?.realVerified === 1);
+/** 头像地址(后端返回的是 /api/upload/... 相对路径) */
+const avatarUrl = computed<string>(() => cusUserStore.userInfo?.avatar || '');
+/** 已实名时证件信息只读,避免自行改证件绕过核验 */
+const certReadonly = computed<boolean>(() => verified.value);
 
 /**
  * 打开资料编辑
  */
 function openProfile(): void {
-  profileForm.nickname = cusUserStore.userInfo?.nickname ?? '';
-  profileForm.email = cusUserStore.userInfo?.email ?? '';
+  const info = cusUserStore.userInfo;
+  profileForm.nickname = info?.nickname ?? '';
+  profileForm.email = info?.email ?? '';
+  profileForm.realName = info?.realName ?? '';
+  profileForm.gender = info?.gender ?? 0;
+  profileForm.birthday = info?.birthday ?? '';
+  profileForm.certType = info?.certType ?? '';
+  // 后端返回的是打码证件号,已实名时不回填(避免把 3****2 当作完整证件号再提交)
+  profileForm.certNo = certReadonly.value ? '' : (info?.certNo ?? '');
   profileVisible.value = true;
+}
+
+/**
+ * 选择头像文件
+ */
+function pickAvatar(): void {
+  avatarInput.value?.click();
+}
+
+/**
+ * 上传头像:先本地预检大小,再走后端上传(avatar 业务限 2MB),最后把 url 存到资料
+ */
+async function onAvatarChange(event: Event): Promise<void> {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = '';
+  if (!file) {
+    return;
+  }
+  if (!file.type.startsWith('image/')) {
+    ElMessage.warning('头像只支持图片格式');
+    return;
+  }
+  const error = checkUpload(file, 'avatar');
+  if (error) {
+    ElMessage.warning(error);
+    return;
+  }
+  avatarUploading.value = true;
+  try {
+    const uploaded = await uploadFileApi(file, 'avatar');
+    const info = await updateCusProfileApi({ avatar: uploaded.url });
+    cusUserStore.setUserInfo(info);
+    ElMessage.success('头像已更新');
+  } finally {
+    avatarUploading.value = false;
+  }
 }
 
 /**
@@ -38,15 +108,45 @@ async function saveProfile(): Promise<void> {
     ElMessage.warning('昵称不能为空');
     return;
   }
+  const payload: Parameters<typeof updateCusProfileApi>[0] = {
+    nickname: profileForm.nickname.trim(),
+    email: profileForm.email.trim(),
+    realName: profileForm.realName.trim(),
+    gender: profileForm.gender,
+    birthday: profileForm.birthday || undefined,
+  };
+  if (!certReadonly.value && (profileForm.certType || profileForm.certNo)) {
+    if (!profileForm.certType) {
+      ElMessage.warning('请选择证件类型');
+      return;
+    }
+    if (!profileForm.certNo.trim()) {
+      ElMessage.warning('请填写证件号');
+      return;
+    }
+    payload.certType = profileForm.certType;
+    payload.certNo = profileForm.certNo.trim();
+  }
   saving.value = true;
   try {
-    const info = await updateCusProfileApi(profileForm.nickname.trim(), profileForm.email.trim());
+    const info = await updateCusProfileApi(payload);
     cusUserStore.setUserInfo(info);
     ElMessage.success('资料已更新');
     profileVisible.value = false;
   } finally {
     saving.value = false;
   }
+}
+
+/**
+ * 实名认证入口:已实名只提示,未实名跳转认证页
+ */
+function goRealName(): void {
+  if (verified.value) {
+    ElMessage.success(`已实名认证(${cusUserStore.userInfo?.certTypeDesc ?? ''} ${cusUserStore.userInfo?.certNo ?? ''})`);
+    return;
+  }
+  void router.push('/realname');
 }
 
 /**
@@ -107,22 +207,63 @@ onMounted(async () => {
       // 登录失效由拦截器统一处理
     }
   }
+  try {
+    certTypes.value = await getCertTypesApi();
+  } catch {
+    // 字典拉取失败不影响页面,下拉为空时用户可稍后重试
+  }
 });
 </script>
 
 <template>
   <div class="m-page profile-page">
-    <!-- 头部 -->
+    <!-- 头部:点头像即可上传 -->
     <header class="profile-hero">
-      <div class="profile-hero__avatar">
-        <el-icon :size="30"><UserFilled /></el-icon>
-      </div>
+      <button type="button" class="profile-hero__avatar" :disabled="avatarUploading" @click="pickAvatar">
+        <img v-if="avatarUrl" :src="avatarUrl" alt="头像" />
+        <el-icon v-else :size="30"><UserFilled /></el-icon>
+        <span class="profile-hero__camera">
+          <el-icon :size="12"><Camera /></el-icon>
+        </span>
+      </button>
+      <input ref="avatarInput" type="file" accept="image/*" class="avatar-input" @change="onAvatarChange" />
       <div class="profile-hero__info">
         <p class="profile-hero__name">{{ cusUserStore.displayName }}</p>
         <p class="profile-hero__phone">{{ cusUserStore.maskedPhone }}</p>
       </div>
-      <el-tag size="small" effect="dark" type="primary" round>客户</el-tag>
+      <div class="profile-hero__tags">
+        <el-tag size="small" effect="dark" type="primary" round>客户</el-tag>
+        <el-tag
+          size="small"
+          effect="dark"
+          round
+          :type="verified ? 'success' : 'warning'"
+          class="verify-tag"
+          @click="goRealName"
+        >
+          {{ verified ? '已实名' : '未实名' }}
+        </el-tag>
+      </div>
     </header>
+
+    <!-- 实名认证状态卡 -->
+    <section class="m-card verify-card" @click="goRealName">
+      <div class="verify-card__icon" :class="{ 'verify-card__icon--done': verified }">
+        <el-icon :size="20"><CircleCheck v-if="verified" /><Warning v-else /></el-icon>
+      </div>
+      <div class="verify-card__body">
+        <p class="verify-card__title">{{ verified ? '已完成实名认证' : '未实名认证' }}</p>
+        <p class="verify-card__desc">
+          {{
+            verified
+              ? `${cusUserStore.userInfo?.realName ?? ''} · ${cusUserStore.userInfo?.certTypeDesc ?? ''} ${cusUserStore.userInfo?.certNo ?? ''}`
+              : '完成认证后可查询本人保单、理赔进度与缴费计划'
+          }}
+        </p>
+      </div>
+      <span class="verify-card__action">{{ verified ? '查看' : '去认证' }}</span>
+      <el-icon class="cell__arrow"><ArrowRight /></el-icon>
+    </section>
 
     <!-- 资料卡 -->
     <section class="m-card profile-card">
@@ -167,6 +308,10 @@ onMounted(async () => {
         <span>{{ cusUserStore.userInfo?.lastLoginTime || '-' }}</span>
       </div>
       <div class="info-row">
+        <span>实名认证</span>
+        <span>{{ verified ? `已认证 ${cusUserStore.userInfo?.realVerifiedTime ?? ''}` : '未认证' }}</span>
+      </div>
+      <div class="info-row">
         <span>注册来源</span>
         <span>{{ cusUserStore.userInfo?.registerSource === 'H5' ? '手机端 H5' : cusUserStore.userInfo?.registerSource }}</span>
       </div>
@@ -185,9 +330,56 @@ onMounted(async () => {
           <input v-model="profileForm.nickname" type="text" maxlength="20" placeholder="请输入昵称" />
         </label>
         <label class="dialog-field">
+          <span>姓名</span>
+          <input v-model="profileForm.realName" type="text" maxlength="50" placeholder="选填,可与证件姓名一致" />
+        </label>
+        <div class="dialog-field">
+          <span>性别</span>
+          <el-radio-group v-model="profileForm.gender" class="dialog-radio">
+            <el-radio :value="0">不填</el-radio>
+            <el-radio :value="1">男</el-radio>
+            <el-radio :value="2">女</el-radio>
+          </el-radio-group>
+        </div>
+        <div class="dialog-field">
+          <span>生日</span>
+          <el-date-picker
+            v-model="profileForm.birthday"
+            type="date"
+            value-format="YYYY-MM-DD"
+            placeholder="选择出生日期"
+            :disabled-date="(date: Date) => date.getTime() > Date.now()"
+            class="dialog-date"
+          />
+        </div>
+        <div class="dialog-field">
+          <span>证件</span>
+          <el-select
+            v-model="profileForm.certType"
+            placeholder="证件类型"
+            :disabled="certReadonly"
+            class="dialog-select"
+          >
+            <el-option v-for="item in certTypes" :key="item.code" :label="item.name" :value="item.code" />
+          </el-select>
+        </div>
+        <label class="dialog-field">
+          <span>证件号</span>
+          <input
+            v-model="profileForm.certNo"
+            type="text"
+            maxlength="64"
+            :disabled="certReadonly"
+            :placeholder="certReadonly ? '已实名,证件号不可修改' : '请输入证件号'"
+          />
+        </label>
+        <label class="dialog-field">
           <span>邮箱</span>
           <input v-model="profileForm.email" type="email" placeholder="选填,用于接收服务通知" />
         </label>
+        <p class="dialog-tip">
+          {{ certReadonly ? '已完成实名认证,证件信息不可自行修改,如需变更请联系客服' : '证件号仅用于实名认证与业务查询,展示时会自动打码' }}
+        </p>
         <p class="dialog-tip">手机号是登录凭证,如需更换请联系客服核身</p>
       </div>
       <template #footer>
@@ -221,9 +413,9 @@ onMounted(async () => {
     <!-- 隐私与安全 -->
     <el-dialog v-model="privacyVisible" title="隐私与安全" width="86%" align-center>
       <div class="dialog-text">
-        <p>我们仅收集手机号、昵称与咨询内容,用于身份识别和回答生成。</p>
+        <p>我们仅收集手机号、昵称、实名认证信息与咨询内容,用于身份识别和回答生成。</p>
+        <p>证件号仅用于实名认证与本人业务查询,页面与导出文件中一律脱敏展示。</p>
         <p>对话内容不会用于营销推送,也不会向第三方出售。</p>
-        <p>请勿在对话中提交身份证号、银行卡号、保单号等敏感信息。</p>
         <p>如需注销账号或删除历史记录,请联系官方客服处理。</p>
       </div>
       <template #footer>
@@ -259,13 +451,37 @@ onMounted(async () => {
   background: linear-gradient(135deg, #1b5faa, #3f8ed0);
 
   &__avatar {
+    position: relative;
     display: flex;
     align-items: center;
     justify-content: center;
     width: 56px;
     height: 56px;
+    padding: 0;
+    overflow: hidden;
+    border: none;
     border-radius: 18px;
     background: rgba(255, 255, 255, 0.2);
+    cursor: pointer;
+
+    img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+  }
+
+  &__camera {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    border-radius: 9px;
+    background: rgba(0, 0, 0, 0.45);
   }
 
   &__info {
@@ -283,10 +499,71 @@ onMounted(async () => {
     font-size: 12px;
     color: rgba(255, 255, 255, 0.78);
   }
+
+  &__tags {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 6px;
+  }
+}
+
+.verify-tag {
+  cursor: pointer;
+}
+
+.avatar-input {
+  display: none;
+}
+
+.verify-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: -20px;
+  padding: 14px 16px;
+
+  &__icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    border-radius: 12px;
+    color: #b54708;
+    background: #fef0c7;
+
+    &--done {
+      color: #067647;
+      background: #dcfae6;
+    }
+  }
+
+  &__body {
+    flex: 1;
+    min-width: 0;
+  }
+
+  &__title {
+    font-size: 14px;
+    font-weight: 600;
+    color: #1f2d3d;
+  }
+
+  &__desc {
+    margin-top: 3px;
+    font-size: 11px;
+    color: #98a2b3;
+  }
+
+  &__action {
+    font-size: 12px;
+    color: #1b5faa;
+  }
 }
 
 .profile-card {
-  margin-top: -20px;
+  margin-top: 12px;
   padding: 4px 16px;
 }
 
@@ -394,6 +671,25 @@ onMounted(async () => {
     background: transparent;
     font-size: 14px;
     color: #1f2d3d;
+
+    &:disabled {
+      color: #98a2b3;
+    }
+  }
+}
+
+.dialog-radio {
+  flex: 1;
+}
+
+.dialog-date,
+.dialog-select {
+  flex: 1;
+
+  :deep(.el-input__wrapper) {
+    padding-left: 0;
+    background: transparent;
+    box-shadow: none;
   }
 }
 

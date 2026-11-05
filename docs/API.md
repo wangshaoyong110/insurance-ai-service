@@ -72,7 +72,26 @@
 | POST | `/auth/logout` | 退出登录 | header: token |
 | GET | `/auth/me` | 当前客户信息 | - |
 | PUT | `/auth/password` | 修改密码 | body: `{ oldPassword, newPassword, confirmPassword }` |
-| PUT | `/auth/profile` | 修改资料 | query: `nickname?`, `email?` |
+| PUT | `/auth/profile` | 修改资料 | body: `{ nickname?, email?, gender?, birthday?, certType?, certNo? }`（只更新非空字段；**已实名后改证件返回 `600`**） |
+| GET | `/auth/cert-types` | 投保证件类型字典 | 返回 `[{ name, code }]`，共 7 种 |
+| POST | `/auth/real-name` | 实名认证 | body: `{ realName, certType, certNo }`；身份证校 GB 11643 校验位，生日与性别由证件号自动回填 |
+
+**资料与实名认证规则**：
+
+| 规则 | 说明 |
+| --- | --- |
+| 证件类型 | `ID_CARD` 居民身份证 / `PASSPORT` 护照 / `OFFICER` 军官证 / `SOLDIER` 士兵证 / `HK_MACAO` 港澳居民来往内地通行证 / `TAIWAN` 台湾居民来往大陆通行证 / `FOREIGN_RESIDENCE` 外国人永久居留身份证 |
+| 身份证校验 | 18 位、前 17 位必须是数字、末位校验码按 GB 11643 加权取模（`X` 兼容大小写）；校验通过后从第 7–14 位回填生日、第 17 位回填性别 |
+| 其他证件 | 只做长度（4–32）与字符集（字母数字及 `-` `_` `/` `(` `)`）校验，不做校验位 |
+| 姓名 | 2–20 字，不能含数字 |
+| 证件锁定 | 实名通过后 `PUT /auth/profile` 再改 `certType` / `certNo` 一律拒绝（`600`），需联系客服变更 |
+| 出口脱敏 | `certNo` 返回 `110****2X`（保留前 3 后 2），`realName` 全量返回供本人核对 |
+| 已实名判定 | `realVerified=1` 且有 `realVerifiedTime`；重复提交实名认证直接返回已认证信息 |
+
+**未实名时的问答限制**：未实名客户仍可问通用知识（投保规则、犹豫期、退保现金价值、理赔材料等），但问到本人保单 / 理赔 / 缴费时：
+
+- 工具层直接拒答（`InsuranceQueryTools` 每个查询工具入口判断实名状态，未实名不查库）；
+- `/chat/send` 与 `/chat/send/stream` 响应带 `needRealName: true`，`answer.content` 为引导文案，前端渲染「去实名认证」按钮跳 `/real-name`。
 
 **图形验证码规则**（登录、注册、发短信都要带 `captchaId` + `captchaCode`）：
 
@@ -172,7 +191,9 @@
   "sessionId": 2,
   "answer": { "id": 4, "role": "assistant", "content": "...", "model": "deepseek-chat", "tokens": 500 },
   "references": ["如何变更受益人?", "什么是保全?可以变更哪些信息?"],
-  "category": "POLICY"
+  "category": "POLICY",
+  "serviceMode": 0,
+  "needRealName": false
 }
 ```
 
@@ -182,6 +203,7 @@
 - 同一会话携带最近 10 条历史消息作为上下文（`insure.deepseek.history-size`）；超出窗口的更早提问会被压成一句「更早的沟通要点」一起带上，避免长会话失忆。
 - 知识库未命中或只有低分命中时，会往 `chat_unknown` 写一条记录，供后台「知识缺口」聚合；本轮调用过工具的提问不记（那类问题本就该查业务库，不需要补语料）。
 - 接口限流 **10 次/分钟**（同步与流式共用计数），超限返回 `429`。
+- **未实名闸门**：未实名客户问本人保单 / 理赔 / 缴费类问题时，响应额外带 `"needRealName": true`，`answer.content` 是引导文案（工具层同时拒绝查库，拿不到任何业务数据）；通用知识类提问不受影响。实名认证接口见「一、客户端认证」。
 
 `/chat/sessions/{id}/messages` 响应 `data` 为分页结构（`records` 内部已按时间正序，可直接渲染）：
 
@@ -266,6 +288,9 @@ AI 答得好不好、答不了怎么办，这两件事都要有出口。
 | GET | `/admin/ticket/{id}` | 工单详情 | - |
 | PUT | `/admin/ticket/{id}/handle` | 接单 / 回复结单 / 取消 | body: `{ status, reply?, priority? }` |
 | GET | `/admin/ticket/statistics` | 待处理 / 处理中 / 已完成 / 今日新增 / 人工接手率 | - |
+| GET | `/admin/ticket/export` | **导出 Excel**（按当前筛选条件） | query 同 `/admin/ticket/page`（`pageNum/pageSize` 忽略，最多导出 10000 条） |
+
+**导出说明**：返回 `Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`，`Content-Disposition` 带 UTF-8 文件名 `服务工单_yyyyMMdd.xlsx`（RFC 5987 编码，浏览器直接下载）。共 **12 列**：工单号 / 客户姓名 / 手机号（脱敏）/ 问题摘要 / 转人工原因 / 优先级 / 状态 / 处理人 / 提交时间 / 接单时间 / 结单时间 / 坐席回复；首行冻结加粗、列宽按内容预设、偶数行浅底色。前端用 `responseType: 'blob'` 直接落盘。
 
 `handle` 的状态流转：`1` 处理中（记录当前登录坐席与接单时间）→ `2` 已完成（写入回复与结单时间）→ `3` 已取消。客户在手机端「我的工单」可见坐席回复。
 
@@ -645,6 +670,40 @@ curl -s -X POST http://localhost:8080/api/chat/send \
 # ---------- 权限隔离验证 ----------
 # 用客户端 token 访问管理端接口,应返回 code=403
 curl -s http://localhost:8080/api/admin/user/page -H "Authorization: Bearer $CUS_TOKEN"
+
+# ---------- 资料编辑与实名认证 ----------
+# 补充性别/生日/邮箱(证件在实名通过后不可自行修改)
+curl -s -X PUT http://localhost:8080/api/auth/profile \
+  -H "Authorization: Bearer $CUS_TOKEN" -H "Content-Type: application/json" \
+  -d '{"gender":2,"birthday":"1990-05-01","email":"zhangsan@example.com"}'
+
+# 投保证件类型字典(7 种)
+curl -s http://localhost:8080/api/auth/cert-types -H "Authorization: Bearer $CUS_TOKEN"
+
+# 实名认证:身份证走 GB 11643 校验位,生日与性别自动回填
+curl -s -X POST http://localhost:8080/api/auth/real-name \
+  -H "Authorization: Bearer $CUS_TOKEN" -H "Content-Type: application/json" \
+  -d '{"realName":"张三","certType":"ID_CARD","certNo":"11010519491231002X"}'
+
+# 已实名后再改证件,应返回 code=600
+curl -s -X PUT http://localhost:8080/api/auth/profile \
+  -H "Authorization: Bearer $CUS_TOKEN" -H "Content-Type: application/json" \
+  -d '{"certType":"PASSPORT","certNo":"E12345678"}'
+
+# ---------- 未实名闸门 ----------
+# 未实名问本人保单:data.needRealName=true,且不查库
+curl -s -X POST http://localhost:8080/api/chat/send \
+  -H "Authorization: Bearer $CUS_TOKEN" -H "Content-Type: application/json" \
+  -d '{"content":"我的保单什么时候到期"}'
+# 未实名问通用知识:正常回答(不被拦)
+curl -s -X POST http://localhost:8080/api/chat/send \
+  -H "Authorization: Bearer $CUS_TOKEN" -H "Content-Type: application/json" \
+  -d '{"content":"退保能退多少钱"}'
+
+# ---------- 工单导出 Excel ----------
+# 不带筛选导出全部(最多 10000 条);带 status=2 只导已完成
+curl -s -o 服务工单.xlsx "http://localhost:8080/api/admin/ticket/export?status=2" \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
 ```
 
 访问异常排查：

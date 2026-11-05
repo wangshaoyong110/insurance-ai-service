@@ -14,6 +14,7 @@ import com.insure.ai.common.enums.ChatRoleEnum;
 import com.insure.ai.common.enums.CommonStatusEnum;
 import com.insure.ai.common.enums.InsuranceCategoryEnum;
 import com.insure.ai.common.enums.ServiceModeEnum;
+import com.insure.ai.common.util.RealNameGate;
 import com.insure.ai.config.DeepSeekProperties;
 import com.insure.ai.config.UploadProperties;
 import com.insure.ai.modules.ai.entity.AiModelConfig;
@@ -33,6 +34,8 @@ import com.insure.ai.modules.kb.entity.KbQuestion;
 import com.insure.ai.modules.kb.service.GapAnalysisService;
 import com.insure.ai.modules.kb.service.KbQuestionService;
 import com.insure.ai.modules.policy.service.PolicyService;
+import com.insure.ai.modules.system.entity.CusUser;
+import com.insure.ai.modules.system.mapper.CusUserMapper;
 import jakarta.annotation.Resource;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -105,6 +108,7 @@ public class ChatServiceImpl implements ChatService {
     private final DeepSeekProperties deepSeekProperties;
     private final AiModelFactory aiModelFactory;
     private final PolicyService policyService;
+    private final CusUserMapper cusUserMapper;
     private final ObjectMapper objectMapper;
     private final UploadProperties uploadProperties;
 
@@ -214,21 +218,36 @@ public class ChatServiceImpl implements ChatService {
             human.setServiceMode(session.getServiceMode());
             return human;
         }
-        // 3. 知识库召回 + 组装上下文
+        // 3. 未实名客户问及本人业务数据:直接给引导话术,不调模型(省 token 且口径统一)
+        boolean verified = isRealNameVerified(cusUserId);
+        if (!verified && RealNameGate.requiresRealName(content)) {
+            String answer = RealNameGate.guidance();
+            ChatMessage assistantMessage = saveMessage(session.getId(), cusUserId, ChatRoleEnum.ASSISTANT,
+                    answer, null, 0);
+            updateSessionSummary(session, content, answer);
+            ChatAnswerVO blocked = new ChatAnswerVO();
+            blocked.setSessionId(session.getId());
+            blocked.setAnswer(ChatMessageVO.from(assistantMessage));
+            blocked.setReferences(List.of());
+            blocked.setCategory(InsuranceCategoryEnum.OTHER);
+            blocked.setNeedRealName(true);
+            return blocked;
+        }
+        // 4. 知识库召回 + 组装上下文
         RecallResult recall = kbQuestionService.recallWithScore(content, RECALL_LIMIT);
         List<KbQuestion> references = recall.items();
-        // 4. 调用大模型(带保单/理赔查询工具)
+        // 5. 调用大模型(带保单/理赔查询工具;未实名时工具内部拒绝查询,拿不到任何业务数据)
         AiModelConfig config = aiModelFactory.defaultConfig();
-        InsuranceQueryTools tools = new InsuranceQueryTools(policyService, cusUserId);
+        InsuranceQueryTools tools = new InsuranceQueryTools(policyService, cusUserId, verified);
         ChatResponse response = callModel(config, tools, cusUserId, session.getId(), references);
         String answer = extractText(response);
-        // 5. AI 回复落库并更新会话摘要
+        // 6. AI 回复落库并更新会话摘要
         ChatMessage assistantMessage = saveMessage(session.getId(), cusUserId, ChatRoleEnum.ASSISTANT,
                 answer, resolveModelName(response, config), extractTokens(response));
         updateSessionSummary(session, content, answer);
-        // 6. 只有"该查知识库却没查到"才算盲区；走工具拿到真实业务数据的提问不算
+        // 7. 只有"该查知识库却没查到"才算盲区；走工具拿到真实业务数据的提问不算
         recordGapIfWeak(cusUserId, session.getId(), content, recall.bestScore(), tools.isInvoked());
-        // 7. 知识库命中次数 +1
+        // 8. 知识库命中次数 +1
         references.forEach(item -> kbQuestionService.increaseHitCount(item.getId()));
 
         ChatAnswerVO result = new ChatAnswerVO();
@@ -272,11 +291,36 @@ public class ChatServiceImpl implements ChatService {
             });
             return emitter;
         }
+        // 未实名客户问及本人业务数据:同步落库引导话术,再用事件流回放,前端同样能拿到 needRealName
+        boolean verified = isRealNameVerified(cusUserId);
+        if (!verified && RealNameGate.requiresRealName(content)) {
+            String blockedAnswer = RealNameGate.guidance();
+            ChatMessage blockedMessage = saveMessage(session.getId(), cusUserId, ChatRoleEnum.ASSISTANT,
+                    blockedAnswer, null, 0);
+            updateSessionSummary(session, content, blockedAnswer);
+            SseEmitter blockedEmitter = new SseEmitter(STREAM_TIMEOUT_MS);
+            chatExecutor.execute(() -> {
+                Map<String, Object> meta = new LinkedHashMap<>();
+                meta.put("sessionId", session.getId());
+                meta.put("references", List.of());
+                meta.put("category", InsuranceCategoryEnum.OTHER.name());
+                meta.put("needRealName", true);
+                sendEvent(blockedEmitter, "meta", meta);
+                sendDelta(blockedEmitter, blockedAnswer);
+                Map<String, Object> done = new LinkedHashMap<>();
+                done.put("sessionId", session.getId());
+                done.put("messageId", blockedMessage.getId());
+                done.put("needRealName", true);
+                sendEvent(blockedEmitter, "done", done);
+                blockedEmitter.complete();
+            });
+            return blockedEmitter;
+        }
         RecallResult recall = kbQuestionService.recallWithScore(content, RECALL_LIMIT);
         List<KbQuestion> references = recall.items();
         AiModelConfig config = aiModelFactory.defaultConfig();
         // 工具实例要贯穿整轮对话：结束后用它判断本轮是否查过业务数据，再决定要不要记知识盲区
-        InsuranceQueryTools tools = new InsuranceQueryTools(policyService, cusUserId);
+        InsuranceQueryTools tools = new InsuranceQueryTools(policyService, cusUserId, verified);
 
         SseEmitter emitter = new SseEmitter(STREAM_TIMEOUT_MS);
         emitter.onTimeout(() -> log.warn("[智能客服] 流式连接超时 sessionId={}", session.getId()));
@@ -559,6 +603,18 @@ public class ChatServiceImpl implements ChatService {
             throw new BusinessException(ResultCode.CHAT_SESSION_NOT_EXIST);
         }
         return session;
+    }
+
+    /**
+     * 当前客户是否已完成实名认证
+     * <p>未实名客户只能问通用知识;涉及本人保单/理赔/缴费的问题会被引导去认证。</p>
+     */
+    private boolean isRealNameVerified(Long cusUserId) {
+        if (cusUserId == null) {
+            return false;
+        }
+        CusUser user = cusUserMapper.selectById(cusUserId);
+        return user != null && user.getRealVerified() != null && user.getRealVerified() == 1;
     }
 
     /**

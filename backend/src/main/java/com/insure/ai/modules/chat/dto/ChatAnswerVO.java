@@ -31,4 +31,11 @@ public class ChatAnswerVO implements Serializable {
      * <p>人工接入时 answer 为空,前端不应再等待 AI 回复,改为轮询坐席消息</p>
      */
     private Integer serviceMode;
+
+    /**
+     * 是否需要先完成实名认证
+     * <p>未实名客户询问本人保单/理赔等业务数据时为 true,answer 里是引导话术,
+     * 前端据此展示「去实名认证」按钮</p>
+     */
+    private Boolean needRealName;
 }

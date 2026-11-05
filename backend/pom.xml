@@ -44,6 +44,8 @@
         <swagger.version>2.2.47</swagger.version>
         <!-- BouncyCastle:国密算法(SM2/SM3/SM4)实现,JDK 原生不提供 -->
         <bouncycastle.version>1.78.1</bouncycastle.version>
+        <!-- Apache POI:Excel 导出(poi-ooxml 5.2.x 对应 JDK17,API 稳定) -->
+        <poi.version>5.2.5</poi.version>
     </properties>
 
     <dependencyManagement>
@@ -175,6 +177,13 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+
+        <!-- Excel 导出:后台工单列表按筛选条件导出 xlsx(SXSSF 流式写,大数据量不炸内存) -->
+        <dependency>
+            <groupId>org.apache.poi</groupId>
+            <artifactId>poi-ooxml</artifactId>
+            <version>${poi.version}</version>
         </dependency>
 
         <!-- 测试 -->

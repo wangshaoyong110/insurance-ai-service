@@ -46,11 +46,17 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '我的', tab: true },
   },
   {
-    // 工单进度从「我的」或咨询页进入，不占底部导航
     path: '/tickets',
     name: 'MobileTicket',
     component: () => import('@/mobile/views/TicketView.vue'),
     meta: { title: '我的工单' },
+  },
+  {
+    // 实名认证:从「我的」或聊天页的「去实名认证」进入,不占底部导航
+    path: '/realname',
+    name: 'MobileRealName',
+    component: () => import('@/mobile/views/RealNameView.vue'),
+    meta: { title: '实名认证' },
   },
   { path: '/:pathMatch(.*)*', redirect: '/chat' },
 ];

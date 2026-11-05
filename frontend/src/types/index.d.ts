@@ -151,10 +151,22 @@ export interface CusUserInfo {
   username: string | null;
   nickname: string;
   realName: string | null;
+  /** 证件类型编码:ID_CARD/PASSPORT/OFFICER/SOLDIER/HK_MACAO/TAIWAN/FOREIGN_RESIDENCE */
+  certType?: string | null;
+  /** 证件类型描述 */
+  certTypeDesc?: string | null;
+  /** 证件号(后端已打码) */
+  certNo?: string | null;
   phone: string;
   email: string | null;
   avatar: string | null;
   gender: number;
+  /** 出生日期 yyyy-MM-dd */
+  birthday?: string | null;
+  /** 实名认证:0-未认证 1-已认证 */
+  realVerified?: number;
+  /** 实名认证时间 */
+  realVerifiedTime?: string | null;
   userType: 'CUSTOMER';
   userTypeDesc: string;
   status: number;
@@ -206,6 +218,8 @@ export interface ChatMessageItem {
   messageId?: number;
   /** 评价状态:1-有用 0-没用，undefined 表示未评价 */
   feedback?: number;
+  /** 该条回复是"需要先实名认证"的引导,前端展示去认证按钮 */
+  needRealName?: boolean;
   /** 本地提示消息(转人工结果等)，不展示评价操作 */
   notice?: boolean;
 }
@@ -219,6 +233,8 @@ export interface ChatAnswer {
   category: string;
   /** 0-AI 2-人工接入中 */
   serviceMode?: number;
+  /** 未实名客户问及本人业务数据时为 true,前端应展示「去实名认证」入口 */
+  needRealName?: boolean;
 }
 
 /** 业务分类 */

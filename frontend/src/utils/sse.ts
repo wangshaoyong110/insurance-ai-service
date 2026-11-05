@@ -13,6 +13,8 @@ export interface SseMetaPayload {
   sessionId: number;
   references?: string[];
   category?: string;
+  /** 未实名客户问及本人业务数据:后端返回引导话术,前端展示「去实名认证」入口 */
+  needRealName?: boolean;
 }
 
 export interface SseDeltaPayload {

@@ -101,6 +101,36 @@ export interface ChangePasswordParams {
   newPassword: string;
 }
 
+/** 个人资料修改参数(只传需要改的字段) */
+export interface CusProfileUpdateParams {
+  nickname?: string;
+  realName?: string;
+  email?: string;
+  /** 头像地址:先调 /file/upload?bizType=avatar 上传拿 url */
+  avatar?: string;
+  /** 性别:0-未知 1-男 2-女 */
+  gender?: number;
+  /** 出生日期 yyyy-MM-dd */
+  birthday?: string;
+  /** 证件类型 */
+  certType?: string;
+  /** 证件号(已实名后不允许修改) */
+  certNo?: string;
+}
+
+/** 实名认证参数 */
+export interface RealNameAuthParams {
+  realName: string;
+  certType: string;
+  certNo: string;
+}
+
+/** 证件类型下拉项 */
+export interface CertificateTypeOption {
+  code: string;
+  name: string;
+}
+
 /* ---------------- 管理端账号 ---------------- */
 
 /** 管理员查询参数 */

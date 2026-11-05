@@ -5,13 +5,17 @@ import com.insure.ai.modules.system.service.CusAuthService;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.insure.ai.common.BusinessException;
 import com.insure.ai.common.ResultCode;
+import com.insure.ai.common.enums.CertTypeEnum;
 import com.insure.ai.common.enums.CommonStatusEnum;
 import com.insure.ai.common.enums.SmsSceneEnum;
 import com.insure.ai.common.enums.UserTypeEnum;
+import com.insure.ai.common.util.CertNoUtils;
 import com.insure.ai.modules.system.dto.ChangePasswordDTO;
+import com.insure.ai.modules.system.dto.CusProfileUpdateDTO;
 import com.insure.ai.modules.system.dto.CusUserVO;
 import com.insure.ai.modules.system.dto.LoginDTO;
 import com.insure.ai.modules.system.dto.LoginVO;
+import com.insure.ai.modules.system.dto.RealNameAuthDTO;
 import com.insure.ai.modules.system.dto.RegisterDTO;
 import com.insure.ai.modules.system.service.SmsService;
 import com.insure.ai.modules.system.service.CaptchaService;
@@ -29,8 +33,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.Date;
+import java.util.Locale;
 
 /**
  * 客户端认证服务(投保咨询客户)
@@ -205,22 +211,131 @@ public class CusAuthServiceImpl implements CusAuthService {
     }
 
     /**
-     * 更新个人资料(仅允许修改昵称与邮箱,手机号需通过客服变更)
+     * 更新个人资料
+     * <p>
+     * 只更新提交的非空字段(MyBatis-Plus 默认忽略 null)。两条硬规则:
+     * 已实名的客户不允许自行改证件(证件是身份依据,改了就等于绕过核验);
+     * 证件号只存明文、出口打码,格式不合法直接拒绝。
+     * </p>
      */
     @Transactional(rollbackFor = Exception.class)
     @Override
-    public CusUserVO updateProfile(Long cusUserId, String nickname, String email) {
+    public CusUserVO updateProfile(Long cusUserId, CusProfileUpdateDTO dto) {
         CusUser exists = cusUserMapper.selectById(cusUserId);
         if (exists == null) {
             throw new BusinessException(ResultCode.CUS_USER_NOT_EXIST);
         }
+        boolean verified = exists.getRealVerified() != null && exists.getRealVerified() == 1;
+        boolean certProvided = StringUtils.hasText(dto.getCertType()) || StringUtils.hasText(dto.getCertNo());
+        if (verified && certProvided) {
+            throw new BusinessException(ResultCode.BUSINESS_ERROR.getCode(),
+                    "已完成实名认证,证件信息不可自行修改,如需变更请联系客服");
+        }
+
         CusUser update = new CusUser();
         update.setId(cusUserId);
-        update.setNickname(StringUtils.hasText(nickname) ? nickname.trim() : exists.getNickname());
-        update.setEmail(StringUtils.hasText(email) ? email.trim() : exists.getEmail());
+        if (StringUtils.hasText(dto.getNickname())) {
+            update.setNickname(dto.getNickname().trim());
+        }
+        if (StringUtils.hasText(dto.getEmail())) {
+            update.setEmail(dto.getEmail().trim());
+        }
+        if (StringUtils.hasText(dto.getAvatar())) {
+            update.setAvatar(dto.getAvatar().trim());
+        }
+        if (StringUtils.hasText(dto.getRealName())) {
+            update.setRealName(dto.getRealName().trim());
+        }
+        if (dto.getGender() != null) {
+            if (dto.getGender() < 0 || dto.getGender() > 2) {
+                throw new BusinessException(ResultCode.PARAM_ERROR.getCode(), "性别取值不正确");
+            }
+            update.setGender(dto.getGender());
+        }
+        if (dto.getBirthday() != null) {
+            if (dto.getBirthday().isAfter(LocalDate.now())) {
+                throw new BusinessException(ResultCode.PARAM_ERROR.getCode(), "出生日期不能晚于今天");
+            }
+            update.setBirthday(dto.getBirthday());
+        }
+        if (certProvided) {
+            CertTypeEnum type = CertTypeEnum.parse(dto.getCertType())
+                    .orElseThrow(() -> new BusinessException(ResultCode.CERT_TYPE_NOT_ALLOWED));
+            String certNo = dto.getCertNo() == null ? "" : dto.getCertNo().trim().toUpperCase(Locale.ROOT);
+            if (!CertNoUtils.isValid(type.getCode(), certNo)) {
+                throw new BusinessException(ResultCode.CERT_NO_FORMAT_ERROR);
+            }
+            update.setCertType(type.getCode());
+            update.setCertNo(certNo);
+        }
         cusUserMapper.updateById(update);
         return CusUserVO.from(cusUserMapper.selectById(cusUserId));
     }
+
+    /**
+     * 实名认证
+     * <p>
+     * 校验姓名与证件格式 → 二要素核验(通道未接入时仅本地校验)→ 置为已实名。
+     * 身份证还能顺带补全生日与性别,减少用户重复填写。
+     * </p>
+     */
+    @Transactional(rollbackFor = Exception.class)
+    @Override
+    public CusUserVO realNameAuth(Long cusUserId, RealNameAuthDTO dto) {
+        CusUser exists = cusUserMapper.selectById(cusUserId);
+        if (exists == null) {
+            throw new BusinessException(ResultCode.CUS_USER_NOT_EXIST);
+        }
+        CertTypeEnum type = CertTypeEnum.parse(dto.getCertType())
+                .orElseThrow(() -> new BusinessException(ResultCode.CERT_TYPE_NOT_ALLOWED));
+        String certNo = dto.getCertNo().trim().toUpperCase(Locale.ROOT);
+        if (!CertNoUtils.isValid(type.getCode(), certNo)) {
+            throw new BusinessException(ResultCode.CERT_NO_FORMAT_ERROR);
+        }
+        String realName = dto.getRealName().trim();
+        if (realName.length() < 2) {
+            throw new BusinessException(ResultCode.PARAM_ERROR.getCode(), "请填写证件上的真实姓名");
+        }
+        doRealNameVerify(realName, type, certNo);
+
+        CusUser update = new CusUser();
+        update.setId(cusUserId);
+        update.setRealName(realName);
+        update.setCertType(type.getCode());
+        update.setCertNo(certNo);
+        update.setRealVerified(1);
+        update.setRealVerifiedTime(LocalDateTime.now());
+        // 身份证号里带出生日期与性别,用户还没填就顺带补上,省一次手工输入
+        if (type == CertTypeEnum.ID_CARD) {
+            if (exists.getBirthday() == null) {
+                update.setBirthday(LocalDate.of(
+                        Integer.parseInt(certNo.substring(6, 10)),
+                        Integer.parseInt(certNo.substring(10, 12)),
+                        Integer.parseInt(certNo.substring(12, 14))));
+            }
+            if (exists.getGender() == null || exists.getGender() == 0) {
+                // 第 17 位奇数为男、偶数为女
+                update.setGender((certNo.charAt(16) - '0') % 2 == 1 ? 1 : 2);
+            }
+        }
+        cusUserMapper.updateById(update);
+        log.info("[实名认证] 客户 {} 认证通过 name={} certType={} certNo={}",
+                cusUserId, realName, type.getCode(), CertNoUtils.mask(certNo));
+        return CusUserVO.from(cusUserMapper.selectById(cusUserId));
+    }
+
+    /**
+     * 二要素核验(姓名 + 证件号)
+     * <p>
+     * TODO 对接公安/运营商实名核验通道:目前仅做本地格式校验(已含身份证校验位),
+     * 接入后在下方发起 HTTP 调用,核验不通过抛 {@link ResultCode#REAL_NAME_INFO_MISMATCH}。
+     * </p>
+     */
+    private void doRealNameVerify(String realName, CertTypeEnum type, String certNo) {
+        log.info("[实名认证] 本地校验通过,核验通道未接入 name={} certType={} certNo={}",
+                realName, type.getCode(), CertNoUtils.mask(certNo));
+    }
+
 
     /**
      * 登录账号展示值:未设置账号时使用手机号

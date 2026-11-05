@@ -53,15 +53,32 @@ public class InsuranceQueryTools {
     private final Long cusUserId;
 
     /**
+     * 当前客户是否已实名认证
+     * <p>未实名时除"理赔材料清单"外,所有查询本人业务数据的工具一律拒绝执行,
+     * 模型拿不到任何保单/理赔数据,只能引导客户先完成实名认证。</p>
+     */
+    private final boolean realNameVerified;
+
+    /**
      * 本次对话是否真的调用过工具
      * <p>用来区分两种"知识库没命中"：客户问的是业务数据（本就该走工具），还是知识库里确实缺这条语料。
      * 前者若也被记成知识盲区，后台就会堆满"我下次什么时候交保费"这类根本不需要补语料的问题。</p>
      */
     private final AtomicBoolean invoked = new AtomicBoolean(false);
 
+    /** 未实名时工具的统一回复 */
+    private static final String REAL_NAME_TIP =
+            "为保护客户信息安全,查询本人保单/理赔/缴费等业务数据前需先完成实名认证。"
+                    + "请告知客户在「我的 → 实名认证」中完成认证后再查询;认证前只能回答通用规则类问题。";
+
     public InsuranceQueryTools(PolicyService policyService, Long cusUserId) {
+        this(policyService, cusUserId, true);
+    }
+
+    public InsuranceQueryTools(PolicyService policyService, Long cusUserId, boolean realNameVerified) {
         this.policyService = policyService;
         this.cusUserId = cusUserId;
+        this.realNameVerified = realNameVerified;
     }
 
     /** 标记工具已被模型调用 */
@@ -84,6 +101,9 @@ public class InsuranceQueryTools {
             """)
     public String listMyPolicies() {
         markInvoked();
+        if (!realNameVerified) {
+            return REAL_NAME_TIP;
+        }
         try {
             if (cusUserId == null) {
                 return "未获取到当前登录客户,无法查询保单。";
@@ -118,6 +138,9 @@ public class InsuranceQueryTools {
     public String getPolicyDetail(
             @ToolParam(description = "保单号,例如 P202403010002") String policyNo) {
         markInvoked();
+        if (!realNameVerified) {
+            return REAL_NAME_TIP;
+        }
         try {
             if (cusUserId == null) {
                 return "未获取到当前登录客户,无法查询保单。";
@@ -169,6 +192,9 @@ public class InsuranceQueryTools {
     public String listMyClaims(
             @ToolParam(required = false, description = "保单号,可留空表示查询全部理赔记录") String policyNo) {
         markInvoked();
+        if (!realNameVerified) {
+            return REAL_NAME_TIP;
+        }
         try {
             if (cusUserId == null) {
                 return "未获取到当前登录客户,无法查询理赔记录。";
@@ -209,6 +235,9 @@ public class InsuranceQueryTools {
     public String getClaimProgress(
             @ToolParam(description = "理赔案号,例如 CLM20261020001") String claimNo) {
         markInvoked();
+        if (!realNameVerified) {
+            return REAL_NAME_TIP;
+        }
         try {
             if (cusUserId == null) {
                 return "未获取到当前登录客户,无法查询理赔进度。";
@@ -271,6 +300,9 @@ public class InsuranceQueryTools {
             """)
     public String analyzeCoverageGap() {
         markInvoked();
+        if (!realNameVerified) {
+            return REAL_NAME_TIP;
+        }
         try {
             if (cusUserId == null) {
                 return "未获取到当前登录客户,无法分析保障情况。";
@@ -356,6 +388,9 @@ public class InsuranceQueryTools {
     public String listUpcomingPayments(
             @ToolParam(required = false, description = "查询未来多少天,默认 30,最大 180") Integer days) {
         markInvoked();
+        if (!realNameVerified) {
+            return REAL_NAME_TIP;
+        }
         try {
             if (cusUserId == null) {
                 return "未获取到当前登录客户,无法查询缴费计划。";

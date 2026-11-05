@@ -9,6 +9,7 @@ import com.insure.ai.common.BaseEntity;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 
 /**
@@ -39,6 +40,12 @@ public class CusUser extends BaseEntity {
     /** 真实姓名 */
     private String realName;
 
+    /** 证件类型:见 CertTypeEnum */
+    private String certType;
+
+    /** 证件号(出口一律打码,见 CertNoUtils.mask) */
+    private String certNo;
+
     /** 手机号(全局唯一,支持手机号登录) */
     private String phone;
 
@@ -50,6 +57,17 @@ public class CusUser extends BaseEntity {
 
     /** 性别:0-未知 1-男 2-女 */
     private Integer gender;
+
+    /** 出生日期 */
+    @JsonFormat(pattern = "yyyy-MM-dd")
+    private LocalDate birthday;
+
+    /** 实名认证:0-未认证 1-已认证 */
+    private Integer realVerified;
+
+    /** 实名认证时间 */
+    @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
+    private LocalDateTime realVerifiedTime;
 
     /** 状态:1-启用 0-禁用 */
     private Integer status;

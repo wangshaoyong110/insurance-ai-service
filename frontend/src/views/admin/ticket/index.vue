@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
 import {
+  exportTicketExcelApi,
   getAdminSessionMessagesApi,
   getTicketPageApi,
   getTicketStatisticsApi,
@@ -119,6 +120,31 @@ async function refreshAll(): Promise<void> {
 
 /* ---------------- 接单 / 取消 ---------------- */
 const acting = ref(false);
+/** 导出中:防止连点重复下载 */
+const exporting = ref(false);
+
+/**
+ * 按当前筛选条件导出 Excel
+ * <p>导出的是"看到什么就导出什么":条件与列表共用 query,不带分页</p>
+ */
+async function exportExcel(): Promise<void> {
+  if (exporting.value) {
+    return;
+  }
+  exporting.value = true;
+  try {
+    const blob = await exportTicketExcelApi(query as TicketQueryParams);
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `服务工单_${new Date().toISOString().slice(0, 10).replace(/-/g, '')}.xlsx`;
+    link.click();
+    URL.revokeObjectURL(url);
+    ElMessage.success('导出成功');
+  } finally {
+    exporting.value = false;
+  }
+}
 
 async function accept(row: TicketItem): Promise<void> {
   acting.value = true;
@@ -383,7 +409,14 @@ onMounted(loadStatistics);
       :loading="loading"
       @search="search"
       @reset="reset"
-    />
+    >
+      <template #actions>
+        <el-button type="success" plain :loading="exporting" @click="exportExcel">
+          <el-icon><Download /></el-icon>
+          导出 Excel
+        </el-button>
+      </template>
+    </BaseSearch>
 
     <div class="card">
       <BaseTable

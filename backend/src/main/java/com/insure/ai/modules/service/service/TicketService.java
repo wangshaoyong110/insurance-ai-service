@@ -44,6 +44,12 @@ public interface TicketService {
     PageResult<ServiceTicket> page(TicketQuery query);
 
     /**
+     * 按筛选条件导出 Excel(xlsx 字节流)
+     * <p>条件与列表页一致,不分页,上限 5 万条;手机号脱敏输出</p>
+     */
+    byte[] exportExcel(TicketQuery query);
+
+    /**
      * 工单详情
      */
     ServiceTicket detail(Long id);

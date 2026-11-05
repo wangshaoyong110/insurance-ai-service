@@ -6,15 +6,18 @@ import com.insure.ai.common.Result;
 import com.insure.ai.common.ResultCode;
 import com.insure.ai.common.annotation.RateLimit;
 import com.insure.ai.common.enums.CaptchaSceneEnum;
+import com.insure.ai.common.enums.CertTypeEnum;
 import com.insure.ai.common.enums.SmsSceneEnum;
 import com.insure.ai.common.util.ClientIpUtils;
 import com.insure.ai.common.util.SecurityUtils;
 import com.insure.ai.config.SecurityProperties;
 import com.insure.ai.modules.system.dto.ChangePasswordDTO;
 import com.insure.ai.modules.system.dto.CaptchaVO;
+import com.insure.ai.modules.system.dto.CusProfileUpdateDTO;
 import com.insure.ai.modules.system.dto.CusUserVO;
 import com.insure.ai.modules.system.dto.LoginDTO;
 import com.insure.ai.modules.system.dto.LoginVO;
+import com.insure.ai.modules.system.dto.RealNameAuthDTO;
 import com.insure.ai.modules.system.dto.RegisterDTO;
 import com.insure.ai.modules.system.dto.SmsCodeVO;
 import com.insure.ai.modules.system.dto.SmsSendDTO;
@@ -34,6 +37,9 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+
+import java.util.List;
+import java.util.Map;
 
 /**
  * 客户端认证控制器(投保咨询客户使用)
@@ -138,12 +144,33 @@ public class AuthController {
     }
 
     /**
-     * 修改个人资料(昵称 / 邮箱)
+     * 修改个人资料(昵称 / 邮箱 / 头像 / 性别 / 生日 / 姓名 / 证件)
+     * <p>头像先调 {@code POST /file/upload?bizType=avatar} 上传(2MB 限制),再把返回的 url 提交到这里</p>
      */
     @Log(module = "客户端-认证", operation = "修改个人资料")
     @PutMapping("/profile")
-    public Result<CusUserVO> updateProfile(@RequestParam(required = false) String nickname,
-                                           @RequestParam(required = false) String email) {
-        return Result.success("资料已更新", cusAuthService.updateProfile(SecurityUtils.getUserId(), nickname, email));
+    public Result<CusUserVO> updateProfile(@Valid @RequestBody CusProfileUpdateDTO dto) {
+        return Result.success("资料已更新", cusAuthService.updateProfile(SecurityUtils.getUserId(), dto));
+    }
+
+    /**
+     * 实名认证(姓名 + 证件类型 + 证件号)
+     * <p>认证后查保单/理赔等本人业务数据不再受限;未认证时 AI 只回答基础问题</p>
+     */
+    @Log(module = "客户端-认证", operation = "实名认证")
+    @RateLimit(limit = 5, seconds = 300, message = "认证提交过于频繁,请稍后再试")
+    @PostMapping("/real-name")
+    public Result<CusUserVO> realNameAuth(@Valid @RequestBody RealNameAuthDTO dto) {
+        return Result.success("实名认证成功", cusAuthService.realNameAuth(SecurityUtils.getUserId(), dto));
+    }
+
+    /**
+     * 证件类型字典(实名认证下拉使用)
+     */
+    @GetMapping("/cert-types")
+    public Result<List<Map<String, String>>> certTypes() {
+        return Result.success(CertTypeEnum.all().stream()
+                .map(item -> Map.of("code", item.getCode(), "name", item.getDesc()))
+                .toList());
     }
 }
